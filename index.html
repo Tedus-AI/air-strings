@@ -1,0 +1,726 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#07080c">
+<title>Air Strings 空中弦</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22%3E%3Cpath d=%22M8 52L56 12%22 stroke=%22%237fe3ff%22 stroke-width=%226%22 stroke-linecap=%22round%22/%3E%3Cpath d=%22M8 30L44 58%22 stroke=%22%23ff9ad5%22 stroke-width=%225%22 stroke-linecap=%22round%22/%3E%3C/svg%3E">
+<style>
+  :root{
+    --bg:#07080c; --panel:rgba(14,16,24,.78); --line:rgba(255,255,255,.12);
+    --text:#eef1f7; --muted:#9aa3b5; --accent:#7fe3ff; --err:#ff6b6b;
+    --safe-b:env(safe-area-inset-bottom,0px); --safe-t:env(safe-area-inset-top,0px);
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
+    font:14px/1.45 -apple-system,BlinkMacSystemFont,"PingFang TC","Noto Sans TC","Microsoft JhengHei",sans-serif;overflow:hidden;
+    overscroll-behavior:none;touch-action:none;user-select:none;-webkit-user-select:none}
+  #cam{display:none}
+  #stage{position:fixed;inset:0;width:100vw;height:100vh;display:block}
+  /* ---------- HUD ---------- */
+  #hud{position:fixed;left:12px;top:calc(10px + var(--safe-t));display:flex;gap:8px;flex-wrap:wrap;pointer-events:none;max-width:calc(100vw - 24px)}
+  .chip{background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:4px 10px;font-size:12px;color:var(--muted);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+  .chip b{color:var(--text);font-weight:600}
+  #hint{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(84px + var(--safe-b));background:var(--panel);border:1px solid var(--line);
+    border-radius:12px;padding:8px 14px;font-size:14px;max-width:min(92vw,560px);text-align:center;pointer-events:none;transition:opacity .4s}
+  /* ---------- Bottom bar ---------- */
+  #bar{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(12px + var(--safe-b));display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:center;
+    background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:6px 8px;max-width:calc(100vw - 16px);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+  #bar .grp{display:flex;align-items:center;gap:4px}
+  #bar label{font-size:12px;color:var(--muted);margin-left:4px}
+  select,button{font:inherit;color:var(--text);background:rgba(255,255,255,.06);border:1px solid var(--line);border-radius:9px;padding:6px 10px;min-height:36px;cursor:pointer}
+  select{padding-right:6px}
+  button:hover,select:hover{background:rgba(255,255,255,.12)}
+  button:disabled{opacity:.35;cursor:default}
+  button.on{background:rgba(127,227,255,.18);border-color:rgba(127,227,255,.55);color:#dff8ff}
+  .sep{width:1px;height:24px;background:var(--line);margin:0 2px}
+  select,button{white-space:nowrap}
+  @media (max-width:600px){
+    #bar{gap:4px;padding:5px 6px;width:calc(100vw - 12px)}
+    #bar label,.sep{display:none}
+    select,button{padding:5px 7px;min-height:34px;font-size:13px}
+    #hint{bottom:calc(122px + var(--safe-b));font-size:13px}
+  }
+  /* ---------- Start overlay ---------- */
+  #start{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:20px;
+    background:radial-gradient(1200px 600px at 50% 30%,#152033 0%,#07080c 70%);z-index:10}
+  .card{max-width:520px;width:100%;background:rgba(18,21,31,.9);border:1px solid var(--line);border-radius:18px;padding:26px 24px}
+  .card h1{margin:0 0 4px;font-size:26px;letter-spacing:.5px}
+  .card h1 span{color:var(--accent)}
+  .card p.sub{margin:0 0 18px;color:var(--muted)}
+  .card ol{margin:0 0 18px;padding-left:20px}
+  .card li{margin:6px 0}
+  .card .btns{display:flex;gap:10px;flex-wrap:wrap}
+  .card .primary{background:var(--accent);color:#04121a;border:none;font-weight:700;padding:10px 18px;min-height:44px}
+  .card .primary:hover{background:#a6edff}
+  #status{margin-top:14px;font-size:13px;color:var(--muted);min-height:20px}
+  #status.err{color:var(--err)}
+  .ver{margin-top:10px;font-size:11px;color:#5d6577}
+  /* ---------- Modal / toast / delete button ---------- */
+  #modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.5);z-index:20}
+  #modal .card{max-width:340px;text-align:center}
+  #modal .btns{justify-content:center;margin-top:14px}
+  #toast{position:fixed;left:50%;top:calc(52px + var(--safe-t));transform:translateX(-50%);background:var(--panel);border:1px solid var(--line);
+    border-radius:10px;padding:7px 14px;opacity:0;transition:opacity .25s;pointer-events:none;z-index:15}
+  #delBtn{position:fixed;display:none;z-index:12;padding:6px 12px;min-height:34px;border-radius:999px;background:rgba(20,22,30,.92)}
+</style>
+</head>
+<body>
+<video id="cam" playsinline muted autoplay></video>
+<canvas id="stage"></canvas>
+
+<div id="hud">
+  <div class="chip">手 <b id="hHands">0</b></div>
+  <div class="chip">弦 <b id="hStrings">0</b></div>
+  <div class="chip" id="hFpsChip"><b id="hFps">–</b> fps</div>
+</div>
+<div id="hint"></div>
+<button id="delBtn">✕ 刪除這條弦</button>
+
+<div id="bar">
+  <div class="grp"><label for="selScale">音階</label>
+    <select id="selScale">
+      <option value="penta">五聲音階</option>
+      <option value="major">大調</option>
+      <option value="minor">小調</option>
+      <option value="chromatic">半音</option>
+      <option value="free">自由音高</option>
+    </select>
+    <select id="selRoot" aria-label="主音"></select>
+  </div>
+  <div class="grp"><label for="selTone">音色</label>
+    <select id="selTone">
+      <option value="guitar">吉他</option>
+      <option value="harp">豎琴</option>
+      <option value="bright">明亮</option>
+    </select>
+  </div>
+  <div class="sep"></div>
+  <div class="grp">
+    <button id="btnTouch" title="觸控／滑鼠操作模式">觸控：撥弦</button>
+    <button id="btnSkel" class="on" title="顯示手部骨架">骨架</button>
+    <button id="btnMirror" class="on" title="鏡像畫面">鏡像</button>
+    <button id="btnCam" title="切換前後鏡頭" disabled>換鏡頭</button>
+  </div>
+  <div class="sep"></div>
+  <div class="grp">
+    <button id="btnUndo" title="復原 (Ctrl+Z)" disabled>↶</button>
+    <button id="btnRedo" title="重做 (Ctrl+Y)" disabled>↷</button>
+    <button id="btnClear" title="清空所有弦" disabled>清空</button>
+  </div>
+</div>
+
+<div id="start">
+  <div class="card">
+    <h1>Air Strings <span>空中弦</span></h1>
+    <p class="sub">用雙手在空中拉出會發聲的弦，再用手指撥它。</p>
+    <ol>
+      <li><b>拉弦</b>：雙手都用拇指捏住食指，往兩邊拉開再放開，弦就留在空中。單手捏住拖曳也可以。</li>
+      <li><b>撥弦</b>：張開手，用食指或中指劃過弦。</li>
+      <li><b>音高</b>：弦越長音越低，預設自動對齊到五聲音階，怎麼彈都好聽。</li>
+    </ol>
+    <div class="btns">
+      <button class="primary" id="btnStart">開啟鏡頭開始</button>
+      <button id="btnTouchOnly">只用觸控試玩</button>
+    </div>
+    <div id="status"></div>
+    <div class="ver">手部追蹤在你的裝置上執行，畫面不會上傳。<span id="verTxt"></span></div>
+  </div>
+</div>
+
+<div id="modal" role="dialog" aria-modal="true">
+  <div class="card">
+    <div id="modalMsg">確定要清空所有弦嗎？</div>
+    <div class="btns">
+      <button id="modalCancel">取消 (Esc)</button>
+      <button id="modalOk" class="on">清空 (Enter)</button>
+    </div>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script type="module">
+const VERSION = "__BUILD_VERSION__";   // 由 CI 自動蓋上，請勿手改
+const TV_VER = "0.10.14";
+const TV_BASE = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${TV_VER}`;
+const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
+const STORE_KEY = "airstrings.v1";
+
+const $ = id => document.getElementById(id);
+const IS_DEV = VERSION.startsWith("__");
+$("verTxt").textContent = IS_DEV ? " 開發版" : ` 版本 ${VERSION}`;
+
+/* =====================================================================
+   常數
+   ===================================================================== */
+const NOTE_NAMES = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+const SCALES = {
+  penta:[0,2,4,7,9], major:[0,2,4,5,7,9,11], minor:[0,2,3,5,7,8,10],
+  chromatic:[0,1,2,3,4,5,6,7,8,9,10,11], free:null,
+};
+const TONES = {
+  guitar:{ bright:0.62, t60:4.2, pos:0.18, gain:0.9 },
+  harp:  { bright:0.38, t60:5.5, pos:0.50, gain:1.0 },
+  bright:{ bright:0.92, t60:2.6, pos:0.10, gain:0.75 },
+};
+const MIN_LEN = 0.06;          // 最短弦長（佔畫面對角線比例）
+const MAX_STRINGS = 16;
+const PINCH_ON = 0.33, PINCH_OFF = 0.48;   // 捏合判定（拇指-食指距離 / 手掌大小），有遲滯
+const LOST_GRACE_MS = 140;     // 手短暫消失的容忍時間
+const PLUCK_COOLDOWN_MS = 110;
+const HAND_LINKS = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],
+  [9,13],[13,14],[14,15],[15,16],[13,17],[0,17],[17,18],[18,19],[19,20]];
+const PLUCK_TIPS = [8,12];
+
+for (let i=0;i<12;i++){ const o=document.createElement("option"); o.value=i; o.textContent=NOTE_NAMES[i]; $("selRoot").appendChild(o); }
+
+/* =====================================================================
+   狀態（單一事實來源）
+   ===================================================================== */
+const S = {
+  strings: [],          // {id,u1,v1,u2,v2,midi,freq,amp,phase,lastPluck,hue,created}
+  settings: { scale:"penta", root:0, tone:"guitar", skel:true, mirror:true, touch:"pluck" },
+  undo: [], redo: [],
+  selected: null,
+  facing: "user",
+};
+let nextId = 1;
+
+/* =====================================================================
+   畫布與座標（弦一律存 0~1 相對座標）
+   ===================================================================== */
+const cv = $("stage"), g = cv.getContext("2d");
+let W=0,H=0,DPR=1,DIAG=1;
+function resize(){
+  DPR = Math.min(window.devicePixelRatio||1, 2);
+  W = window.innerWidth; H = window.innerHeight; DIAG = Math.hypot(W,H);
+  cv.width = Math.round(W*DPR); cv.height = Math.round(H*DPR);
+  g.setTransform(DPR,0,0,DPR,0,0);
+}
+window.addEventListener("resize", resize); resize();
+const toPx = (u,v) => [u*W, v*H];
+const lenOf = s => Math.hypot((s.u2-s.u1)*W,(s.v2-s.v1)*H)/DIAG;
+
+/* =====================================================================
+   音高
+   ===================================================================== */
+const midiToFreq = m => 440*Math.pow(2,(m-69)/12);
+const freqToMidi = f => 69 + 12*Math.log2(f/440);
+function noteName(m){ const r=Math.round(m); return NOTE_NAMES[((r%12)+12)%12] + (Math.floor(r/12)-1); }
+function pitchForLength(L){
+  // 長度 0.6 對角線 ≈ C3；長度減半升一個八度
+  const f = 130.81 * (0.6/Math.max(L,0.02));
+  let m = Math.min(96, Math.max(36, freqToMidi(f)));
+  const sc = SCALES[S.settings.scale];
+  if (sc){
+    let best=m, bd=1e9;
+    for (let k=Math.floor(m)-12;k<=Math.ceil(m)+12;k++){
+      const pc = ((k - S.settings.root)%12+12)%12;
+      if (!sc.includes(pc)) continue;
+      const d = Math.abs(k-m); if (d<bd){bd=d;best=k;}
+    }
+    m = best;
+  }
+  return { midi:m, freq:midiToFreq(m) };
+}
+const hueForMidi = m => (((m - S.settings.root)%12+12)%12)*30 + 190;
+
+/* =====================================================================
+   聲音：Karplus-Strong 撥弦合成
+   ===================================================================== */
+let AC=null, master=null, revSend=null;
+const bufCache = new Map();
+function initAudio(){
+  if (AC) { if (AC.state!=="running") AC.resume(); return; }
+  AC = new (window.AudioContext||window.webkitAudioContext)();
+  const comp = AC.createDynamicsCompressor();
+  comp.threshold.value=-14; comp.ratio.value=4; comp.attack.value=0.003; comp.release.value=0.25;
+  master = AC.createGain(); master.gain.value = 0.8;
+  master.connect(comp); comp.connect(AC.destination);
+  // 簡易殘響
+  const conv = AC.createConvolver(); const len = Math.floor(AC.sampleRate*2.2);
+  const ir = AC.createBuffer(2,len,AC.sampleRate);
+  for (let ch=0;ch<2;ch++){ const d=ir.getChannelData(ch); for(let i=0;i<len;i++) d[i]=(Math.random()*2-1)*Math.pow(1-i/len,3.2); }
+  conv.buffer = ir; revSend = AC.createGain(); revSend.gain.value = 0.22;
+  revSend.connect(conv); conv.connect(comp);
+  // iOS：靜音開關下也要能出聲需使用者手勢後播放一個空 buffer
+  const b = AC.createBuffer(1,1,AC.sampleRate), s = AC.createBufferSource(); s.buffer=b; s.connect(AC.destination); s.start();
+}
+function ksBuffer(freq, toneKey, posBucket){
+  const key = `${freq.toFixed(2)}|${toneKey}|${posBucket}`;
+  if (bufCache.has(key)) return bufCache.get(key);
+  const T = TONES[toneKey], sr = AC.sampleRate;
+  const t60 = T.t60 * Math.pow(220/freq, 0.35);
+  const dur = Math.min(6, t60*1.05);
+  const len = Math.floor(sr*dur), out = new Float32Array(len);
+  const N = Math.max(2, Math.round(sr/freq));
+  const d = new Float32Array(N);
+  // 激發：白噪音 → 一階低通（亮度）→ 撥弦位置梳狀濾波
+  let lp=0; const a = 0.15 + 0.85*T.bright;
+  for (let i=0;i<N;i++){ lp += a*((Math.random()*2-1)-lp); d[i]=lp; }
+  const pos = Math.min(0.5, T.pos*0.6 + posBucket*0.1);
+  const P = Math.max(1, Math.round(N*pos)); const ex = d.slice();
+  for (let i=0;i<N;i++) d[i] = ex[i] - 0.9*ex[(i-P+N)%N];
+  let mean=0; for (let i=0;i<N;i++) mean+=d[i]; mean/=N; let pk=0;
+  for (let i=0;i<N;i++){ d[i]-=mean; pk=Math.max(pk,Math.abs(d[i])); }
+  for (let i=0;i<N;i++) d[i]/= (pk||1);
+  const loss = Math.pow(0.001, 1/(freq*t60));
+  let idx=0;
+  for (let n=0;n<len;n++){
+    const y=d[idx], nx=d[(idx+1)%N];
+    out[n]=y; d[idx]=loss*(0.5*(y+nx)); idx=(idx+1)%N;
+  }
+  const fade = Math.min(len, Math.floor(sr*0.05));
+  for (let i=0;i<fade;i++) out[len-1-i]*= i/fade;
+  const buf = AC.createBuffer(1,len,sr); buf.copyToChannel(out,0);
+  if (bufCache.size>160) bufCache.delete(bufCache.keys().next().value);
+  bufCache.set(key,buf); return buf;
+}
+function playPluck(s, vel, t){
+  if (!AC) return;
+  const T = TONES[S.settings.tone];
+  const posBucket = Math.min(4, Math.floor(Math.min(t,1-t)*10));
+  const src = AC.createBufferSource(); src.buffer = ksBuffer(s.freq, S.settings.tone, posBucket);
+  const gn = AC.createGain(); gn.gain.value = T.gain * (0.25 + 0.75*Math.min(1,vel));
+  const pan = AC.createStereoPanner ? AC.createStereoPanner() : null;
+  src.connect(gn);
+  if (pan){ pan.pan.value = Math.max(-0.9,Math.min(0.9,((s.u1+s.u2)/2-0.5)*1.6)); gn.connect(pan); pan.connect(master); pan.connect(revSend); }
+  else { gn.connect(master); gn.connect(revSend); }
+  src.start();
+}
+
+/* =====================================================================
+   弦的增刪（含 undo / redo）
+   ===================================================================== */
+function makeString(p1,p2){
+  const s = { id:nextId++, u1:p1[0]/W, v1:p1[1]/H, u2:p2[0]/W, v2:p2[1]/H, amp:0, phase:0, lastPluck:{}, created:performance.now() };
+  const { midi, freq } = pitchForLength(lenOf(s));
+  s.midi=midi; s.freq=freq; s.hue=hueForMidi(midi);
+  return s;
+}
+function doAction(act, record=true){
+  if (act.type==="add"){ S.strings.push(act.s); if (S.strings.length>MAX_STRINGS){ const old=S.strings.shift(); act.evicted=old; } }
+  else if (act.type==="del"){ act.index = S.strings.findIndex(x=>x.id===act.s.id); if (act.index>=0) S.strings.splice(act.index,1); }
+  else if (act.type==="clear"){ act.list = S.strings.slice(); S.strings.length=0; }
+  if (record){ S.undo.push(act); S.redo.length=0; }
+  afterChange();
+}
+function undoAction(){
+  const act = S.undo.pop(); if (!act) return;
+  if (act.type==="add"){ const i=S.strings.findIndex(x=>x.id===act.s.id); if(i>=0) S.strings.splice(i,1); if (act.evicted) S.strings.unshift(act.evicted); }
+  else if (act.type==="del"){ S.strings.splice(Math.max(0,Math.min(act.index,S.strings.length)),0,act.s); }
+  else if (act.type==="clear"){ S.strings.push(...act.list); }
+  S.redo.push(act); afterChange(); toast("已復原");
+}
+function redoAction(){ const act=S.redo.pop(); if(!act) return; doAction(act,false); S.undo.push(act); toast("已重做"); }
+function afterChange(){
+  S.selected = S.strings.find(s=>s===S.selected) || null;
+  $("btnUndo").disabled = !S.undo.length; $("btnRedo").disabled = !S.redo.length;
+  $("btnClear").disabled = !S.strings.length;
+  $("hStrings").textContent = S.strings.length;
+  save(); updateHint();
+}
+function retuneAll(){
+  for (const s of S.strings){ const p=pitchForLength(lenOf(s)); s.midi=p.midi; s.freq=p.freq; s.hue=hueForMidi(p.midi); }
+  save();
+}
+
+/* ---------- 存檔（localStorage，失敗不影響使用） ---------- */
+function save(){
+  try{
+    localStorage.setItem(STORE_KEY, JSON.stringify({ settings:S.settings,
+      strings:S.strings.map(({u1,v1,u2,v2,midi,freq,hue})=>({u1,v1,u2,v2,midi,freq,hue})) }));
+  }catch(e){}
+}
+function load(){
+  try{
+    const d = JSON.parse(localStorage.getItem(STORE_KEY)||"null"); if (!d) return;
+    Object.assign(S.settings, d.settings||{});
+    for (const x of (d.strings||[])) S.strings.push({ ...x, id:nextId++, amp:0, phase:0, lastPluck:{}, created:0 });
+  }catch(e){}
+}
+
+/* =====================================================================
+   撥弦偵測：線段相交
+   ===================================================================== */
+function segHit(ax,ay,bx,by, cx,cy,dx,dy){
+  const r1x=bx-ax, r1y=by-ay, r2x=dx-cx, r2y=dy-cy;
+  const den = r1x*r2y - r1y*r2x; if (Math.abs(den)<1e-9) return null;
+  const t = ((cx-ax)*r2y - (cy-ay)*r2x)/den, u = ((cx-ax)*r1y - (cy-ay)*r1x)/den;
+  return (t>=0&&t<=1&&u>=0&&u<=1) ? { t:u } : null;   // u = 在弦上的位置 0~1
+}
+const particles = [];
+function tryPluck(key, a, b, now){
+  const dx=b[0]-a[0], dy=b[1]-a[1], dist=Math.hypot(dx,dy);
+  if (dist<2 || dist>DIAG*0.25) return;          // 太小=沒動，太大=追蹤跳動
+  for (const s of S.strings){
+    if (now - s.created < 250) continue;
+    const [x1,y1]=toPx(s.u1,s.v1), [x2,y2]=toPx(s.u2,s.v2);
+    const hit = segHit(a[0],a[1],b[0],b[1], x1,y1,x2,y2); if (!hit) continue;
+    if (now - (s.lastPluck[key]||0) < PLUCK_COOLDOWN_MS) continue;
+    s.lastPluck[key]=now;
+    const vel = Math.min(1, dist/(DIAG*0.035));
+    s.amp = Math.min(1.4, s.amp + 0.5 + vel*0.7); s.phase = 0; s.hitT = hit.t;
+    playPluck(s, vel, hit.t);
+    const px=x1+(x2-x1)*hit.t, py=y1+(y2-y1)*hit.t;
+    for (let i=0;i<10+Math.round(vel*14);i++){
+      const ang=Math.random()*Math.PI*2, sp=(40+Math.random()*220)*(0.5+vel);
+      particles.push({x:px,y:py,vx:Math.cos(ang)*sp,vy:Math.sin(ang)*sp,life:1,hue:s.hue});
+    }
+  }
+}
+
+/* =====================================================================
+   手部追蹤
+   ===================================================================== */
+const video = $("cam");
+let landmarker=null, camStream=null, lastVideoTime=-1, camReady=false;
+const hands = new Map();   // key -> {pts, pinched, pinchPt, lastSeen, tips:{}}
+let draft = null;          // {mode:'one'|'two', a, b, p1, p2}
+
+function withTimeout(p, ms, label){
+  let t; return Promise.race([p, new Promise((_,rej)=>{ t=setTimeout(()=>rej(new Error(label+" 逾時")),ms); })]).finally(()=>clearTimeout(t));
+}
+async function loadLandmarker(){
+  const attempt = async (delegate) => {
+    const vision = await withTimeout(import(`${TV_BASE}/vision_bundle.mjs`), 20000, "載入程式庫");
+    const fileset = await withTimeout(vision.FilesetResolver.forVisionTasks(`${TV_BASE}/wasm`), 20000, "載入 WASM");
+    return await withTimeout(vision.HandLandmarker.createFromOptions(fileset, {
+      baseOptions:{ modelAssetPath:MODEL_URL, delegate },
+      runningMode:"VIDEO", numHands:2,
+      minHandDetectionConfidence:0.55, minHandPresenceConfidence:0.5, minTrackingConfidence:0.5,
+    }), 30000, "載入手部模型");
+  };
+  try { return await attempt("GPU"); }
+  catch(e1){ console.warn("GPU 失敗，改用 CPU 重試", e1); return await attempt("CPU"); }   // 重試一次
+}
+async function startCamera(){
+  if (camStream) camStream.getTracks().forEach(t=>t.stop());
+  camStream = await navigator.mediaDevices.getUserMedia({ audio:false,
+    video:{ facingMode:S.facing, width:{ideal:1280}, height:{ideal:720}, frameRate:{ideal:60,max:60} } });
+  video.srcObject = camStream; await video.play(); camReady = true; lastVideoTime=-1;
+  try{
+    const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==="videoinput");
+    $("btnCam").disabled = devs.length < 2;
+  }catch(e){}
+}
+function coverMap(){
+  const vw=video.videoWidth||1280, vh=video.videoHeight||720;
+  const s=Math.max(W/vw,H/vh); return { s, ox:(W-vw*s)/2, oy:(H-vh*s)/2, vw, vh };
+}
+function lmToScreen(lm, m){
+  const x = S.settings.mirror ? (1-lm.x) : lm.x;
+  return [m.ox + x*m.vw*m.s, m.oy + lm.y*m.vh*m.s];
+}
+const dist2 = (a,b)=>Math.hypot(a[0]-b[0],a[1]-b[1]);
+
+function processHands(res, now){
+  const m = coverMap(); const seen = new Set();
+  (res.landmarks||[]).forEach((lms, i) => {
+    const label = res.handedness?.[i]?.[0]?.categoryName || ("h"+i);
+    let key = label; if (seen.has(key)) key = label+"2"; seen.add(key);
+    const pts = lms.map(l=>lmToScreen(l,m));
+    const scale = Math.max(8, dist2(pts[0],pts[9]));
+    const pinchR = dist2(pts[4],pts[8])/scale;
+    let h = hands.get(key);
+    if (!h){ h = { pinched:false, tips:{} }; hands.set(key,h); }
+    h.pts = pts; h.lastSeen = now; h.pinchR = pinchR;
+    h.pinchPt = [(pts[4][0]+pts[8][0])/2, (pts[4][1]+pts[8][1])/2];
+    const wasPinched = h.pinched;
+    h.pinched = wasPinched ? pinchR < PINCH_OFF : pinchR < PINCH_ON;
+    if (!wasPinched && h.pinched) onPinchStart(key, h);
+    if (wasPinched && !h.pinched) onPinchEnd(key);
+  });
+  for (const [key,h] of hands){
+    if (now - h.lastSeen > LOST_GRACE_MS){ if (h.pinched) onPinchEnd(key); hands.delete(key); }
+  }
+  // 撥弦：沒有在捏的手，用食指與中指指尖
+  for (const [key,h] of hands){
+    if (h.lastSeen !== now) continue;
+    for (const tip of PLUCK_TIPS){
+      const cur = h.pts[tip], prev = h.tips[tip];
+      if (prev && !h.pinched && !(draft && (draft.a===key||draft.b===key))) tryPluck(key+tip, prev, cur, now);
+      h.tips[tip] = cur;
+    }
+  }
+  if (draft) updateDraft();
+  $("hHands").textContent = hands.size;
+}
+function onPinchStart(key, h){
+  if (!draft){ draft = { mode:"one", a:key, b:null, p1:h.pinchPt.slice(), p2:h.pinchPt.slice() }; S.selected=null; }
+  else if (!draft.b && draft.a!==key){ draft.mode="two"; draft.b=key; }
+}
+function onPinchEnd(key){
+  if (!draft || (draft.a!==key && draft.b!==key)) return;
+  commitDraft();
+}
+function updateDraft(){
+  const ha = hands.get(draft.a), hb = draft.b ? hands.get(draft.b) : null;
+  if (draft.mode==="two" && ha && hb){ draft.p1 = ha.pinchPt.slice(); draft.p2 = hb.pinchPt.slice(); }
+  else if (ha){ draft.p2 = ha.pinchPt.slice(); }
+}
+function commitDraft(){
+  const d = draft; draft = null; if (!d) return;
+  const L = Math.hypot(d.p2[0]-d.p1[0], d.p2[1]-d.p1[1])/DIAG;
+  if (L < MIN_LEN) return;
+  const s = makeString(d.p1, d.p2);
+  doAction({ type:"add", s });
+  s.amp = 0.5; playPluck(s, 0.35, 0.5);
+}
+
+/* =====================================================================
+   觸控／滑鼠
+   ===================================================================== */
+const ptr = new Map();
+function nearestString(x,y,maxD){
+  let best=null, bd=maxD;
+  for (const s of S.strings){
+    const [x1,y1]=toPx(s.u1,s.v1),[x2,y2]=toPx(s.u2,s.v2);
+    const dx=x2-x1, dy=y2-y1, L2=dx*dx+dy*dy||1;
+    const t=Math.max(0,Math.min(1,((x-x1)*dx+(y-y1)*dy)/L2));
+    const d=Math.hypot(x-(x1+dx*t), y-(y1+dy*t));
+    if (d<bd){bd=d;best=s;}
+  }
+  return best;
+}
+cv.addEventListener("pointerdown", e=>{
+  initAudio(); cv.setPointerCapture(e.pointerId);
+  const p=[e.clientX,e.clientY];
+  ptr.set(e.pointerId,{ start:p, last:p, t0:performance.now(), moved:false });
+  if (S.settings.touch==="draw" && !draft) draft = { mode:"ptr", a:"p"+e.pointerId, p1:p.slice(), p2:p.slice() };
+});
+cv.addEventListener("pointermove", e=>{
+  const st=ptr.get(e.pointerId); if(!st) return;
+  const p=[e.clientX,e.clientY], now=performance.now();
+  if (dist2(p,st.start)>8) st.moved=true;
+  if (draft && draft.a==="p"+e.pointerId) draft.p2=p.slice();
+  else if (S.settings.touch==="pluck") tryPluck("p"+e.pointerId, st.last, p, now);
+  st.last=p;
+});
+function endPtr(e){
+  const st=ptr.get(e.pointerId); if(!st) return; ptr.delete(e.pointerId);
+  if (draft && draft.a==="p"+e.pointerId){ commitDraft(); return; }
+  if (!st.moved && performance.now()-st.t0<350){
+    S.selected = nearestString(e.clientX,e.clientY,26);
+  }
+}
+cv.addEventListener("pointerup", endPtr); cv.addEventListener("pointercancel", endPtr);
+
+/* =====================================================================
+   繪圖
+   ===================================================================== */
+let lastFrame = performance.now(), fpsAcc=0, fpsN=0, fpsT=0, detFps=0, detN=0;
+function drawVideo(){
+  if (!camReady || !video.videoWidth){
+    const gr=g.createRadialGradient(W/2,H*0.35,0,W/2,H*0.35,DIAG*0.6);
+    gr.addColorStop(0,"#152033"); gr.addColorStop(1,"#07080c"); g.fillStyle=gr; g.fillRect(0,0,W,H); return;
+  }
+  const m=coverMap(); g.save();
+  if (S.settings.mirror){ g.translate(W,0); g.scale(-1,1); }
+  g.drawImage(video, S.settings.mirror ? W-m.ox-m.vw*m.s : m.ox, m.oy, m.vw*m.s, m.vh*m.s);
+  g.restore();
+  g.fillStyle="rgba(4,6,12,0.45)"; g.fillRect(0,0,W,H);
+}
+function drawString(s, dt, t){
+  const [x1,y1]=toPx(s.u1,s.v1),[x2,y2]=toPx(s.u2,s.v2);
+  const dx=x2-x1, dy=y2-y1, L=Math.hypot(dx,dy)||1, nx=-dy/L, ny=dx/L;
+  s.amp *= Math.exp(-dt/0.9); if (s.amp<0.002) s.amp=0;
+  s.phase += dt;
+  const visF = Math.min(16, 4 + s.freq/45);
+  const A = s.amp * Math.min(18, 4 + L*0.03);
+  const sel = S.selected===s;
+  const col = `hsl(${s.hue},90%,${62+s.amp*20}%)`;
+  // 刻度
+  g.strokeStyle=`hsla(${s.hue},60%,80%,0.35)`; g.lineWidth=1;
+  for (let k=1;k<12;k++){ const f=k/12, px=x1+dx*f, py=y1+dy*f, h=(k%3===0)?7:4;
+    g.beginPath(); g.moveTo(px-nx*h,py-ny*h); g.lineTo(px+nx*h,py+ny*h); g.stroke(); }
+  // 弦本體（駐波）
+  g.save(); g.globalCompositeOperation="lighter";
+  g.shadowColor=col; g.shadowBlur= (8 + s.amp*22) ;
+  g.strokeStyle=col; g.lineWidth = (sel?3.2:2) + s.amp*2.2; g.lineCap="round";
+  const segs = 36; g.beginPath();
+  for (let i=0;i<=segs;i++){
+    const f=i/segs; const off = A*Math.sin(Math.PI*f)*Math.sin(2*Math.PI*visF*s.phase + (s.hitT||0.5)*3);
+    const px=x1+dx*f+nx*off, py=y1+dy*f+ny*off; i?g.lineTo(px,py):g.moveTo(px,py);
+  }
+  g.stroke(); g.restore();
+  // 端點
+  g.fillStyle=col; for (const [px,py] of [[x1,y1],[x2,y2]]){ g.beginPath(); g.arc(px,py,sel?5:3.5,0,Math.PI*2); g.fill(); }
+  // 音名
+  g.fillStyle=`hsla(${s.hue},80%,85%,${0.55+s.amp*0.45})`; g.font="600 12px -apple-system,system-ui,sans-serif";
+  const lx = x1 + nx*14, ly = y1 + ny*14; g.fillText(noteName(s.midi), lx-8, ly+4);
+}
+function drawDraft(){
+  if (!draft) return;
+  const [x1,y1]=draft.p1,[x2,y2]=draft.p2, L=Math.hypot(x2-x1,y2-y1)/DIAG;
+  const ok = L>=MIN_LEN; const p = pitchForLength(L);
+  g.save(); g.setLineDash([8,6]); g.lineWidth=2;
+  g.strokeStyle = ok ? `hsl(${hueForMidi(p.midi)},90%,70%)` : "rgba(255,255,255,0.35)";
+  g.beginPath(); g.moveTo(x1,y1); g.lineTo(x2,y2); g.stroke(); g.restore();
+  if (ok){
+    const mx=(x1+x2)/2, my=(y1+y2)/2; const txt = S.settings.scale==="free" ? `${noteName(p.midi)} · ${p.freq.toFixed(0)} Hz` : noteName(p.midi);
+    g.font="700 18px -apple-system,system-ui,sans-serif"; const w=g.measureText(txt).width+18;
+    g.fillStyle="rgba(10,12,18,0.75)"; g.beginPath(); g.roundRect(mx-w/2,my-34,w,26,8); g.fill();
+    g.fillStyle="#fff"; g.fillText(txt, mx-w/2+9, my-15);
+  }
+}
+function drawHands(){
+  for (const [,h] of hands){
+    const pts=h.pts; if (!pts) continue;
+    if (S.settings.skel){
+      g.strokeStyle="rgba(140,255,170,0.65)"; g.lineWidth=2;
+      for (const [a,b] of HAND_LINKS){ g.beginPath(); g.moveTo(...pts[a]); g.lineTo(...pts[b]); g.stroke(); }
+      g.fillStyle="rgba(255,110,110,0.9)";
+      for (const p of pts){ g.beginPath(); g.arc(p[0],p[1],2.6,0,Math.PI*2); g.fill(); }
+    }
+    // 捏合指示環
+    const r = 14, prog = Math.max(0, Math.min(1, (PINCH_OFF*1.6 - h.pinchR)/(PINCH_OFF*1.6 - PINCH_ON)));
+    g.lineWidth=2.5; g.strokeStyle = h.pinched ? "rgba(127,227,255,1)" : "rgba(255,255,255,0.45)";
+    g.beginPath(); g.arc(h.pinchPt[0],h.pinchPt[1], r, -Math.PI/2, -Math.PI/2 + Math.PI*2*(h.pinched?1:prog)); g.stroke();
+    if (h.pinched){ g.fillStyle="rgba(127,227,255,0.35)"; g.beginPath(); g.arc(h.pinchPt[0],h.pinchPt[1],r-4,0,Math.PI*2); g.fill(); }
+    // 撥弦指尖
+    if (!h.pinched){ g.fillStyle="rgba(255,255,255,0.9)"; for (const t of PLUCK_TIPS){ g.beginPath(); g.arc(pts[t][0],pts[t][1],4,0,Math.PI*2); g.fill(); } }
+  }
+}
+function drawParticles(dt){
+  g.save(); g.globalCompositeOperation="lighter";
+  for (let i=particles.length-1;i>=0;i--){
+    const p=particles[i]; p.life-=dt*1.8; if (p.life<=0){ particles.splice(i,1); continue; }
+    p.x+=p.vx*dt; p.y+=p.vy*dt; p.vx*=0.92; p.vy=p.vy*0.92+30*dt;
+    g.fillStyle=`hsla(${p.hue},100%,75%,${p.life})`; g.beginPath(); g.arc(p.x,p.y,1.5+p.life*1.8,0,Math.PI*2); g.fill();
+  }
+  g.restore();
+}
+function placeDelBtn(){
+  const b=$("delBtn");
+  if (!S.selected){ b.style.display="none"; return; }
+  const s=S.selected, [x1,y1]=toPx(s.u1,s.v1),[x2,y2]=toPx(s.u2,s.v2);
+  b.style.display="block";
+  const bw=b.offsetWidth||120, bh=b.offsetHeight||34;
+  const x=Math.max(8,Math.min(W-bw-8,(x1+x2)/2-bw/2)), y=Math.max(8,Math.min(H-bh-90,(y1+y2)/2-bh-14));
+  b.style.left=x+"px"; b.style.top=y+"px";
+}
+
+function frame(){
+  const now=performance.now(), dt=Math.min(0.05,(now-lastFrame)/1000); lastFrame=now;
+  if (landmarker && camReady && video.readyState>=2 && video.currentTime!==lastVideoTime){
+    lastVideoTime=video.currentTime;
+    try{ processHands(landmarker.detectForVideo(video, now), now); detN++; }catch(e){ console.warn(e); }
+  } else if (landmarker && camReady){
+    // 沒有新影格：仍檢查手是否消失
+    for (const [key,h] of hands){ if (now-h.lastSeen>LOST_GRACE_MS){ if (h.pinched) onPinchEnd(key); hands.delete(key); } }
+  }
+  drawVideo();
+  for (const s of S.strings) drawString(s, dt, now);
+  drawDraft(); drawHands(); drawParticles(dt); placeDelBtn();
+  fpsT+=dt; if (fpsT>=1){ $("hFps").textContent = landmarker&&camReady ? detN : Math.round(1/dt); detN=0; fpsT=0; }
+  requestAnimationFrame(frame);
+}
+
+/* =====================================================================
+   UI
+   ===================================================================== */
+let toastTimer=null;
+function toast(msg){ const t=$("toast"); t.textContent=msg; t.style.opacity=1; clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.style.opacity=0,1300); }
+function updateHint(){
+  const h=$("hint"); let msg="";
+  const camMode = !!landmarker && camReady;
+  if (!S.strings.length) msg = camMode ? "雙手用拇指捏住食指，往兩邊拉開再放開，就會留下一條弦" :
+                                         (S.settings.touch==="draw" ? "在畫面上拖曳拉出一條弦" : "先切到「觸控：拉弦」拖曳拉出弦");
+  else if (S.strings.length<3) msg = camMode ? "張開手，用食指或中指劃過弦就會發聲；弦越短音越高" :
+                                               (S.settings.touch==="pluck" ? "手指快速劃過弦就會發聲" : "切到「觸控：撥弦」就能劃過弦彈奏");
+  h.textContent=msg; h.style.opacity = msg?1:0;
+}
+function syncUI(){
+  $("selScale").value=S.settings.scale; $("selRoot").value=S.settings.root; $("selTone").value=S.settings.tone;
+  $("selRoot").disabled = S.settings.scale==="free" || S.settings.scale==="chromatic";
+  $("btnSkel").classList.toggle("on",S.settings.skel);
+  $("btnMirror").classList.toggle("on",S.settings.mirror);
+  $("btnTouch").textContent = S.settings.touch==="pluck" ? "觸控：撥弦" : "觸控：拉弦";
+  $("btnTouch").classList.toggle("on", S.settings.touch==="draw");
+  updateHint();
+}
+$("selScale").onchange=e=>{ S.settings.scale=e.target.value; retuneAll(); syncUI(); toast("已重新調音"); };
+$("selRoot").onchange=e=>{ S.settings.root=+e.target.value; retuneAll(); syncUI(); toast("已重新調音"); };
+$("selTone").onchange=e=>{ S.settings.tone=e.target.value; save(); };
+$("btnSkel").onclick=()=>{ S.settings.skel=!S.settings.skel; save(); syncUI(); };
+$("btnMirror").onclick=()=>{ S.settings.mirror=!S.settings.mirror; save(); syncUI(); };
+$("btnTouch").onclick=()=>{ S.settings.touch = S.settings.touch==="pluck"?"draw":"pluck"; save(); syncUI(); };
+$("btnUndo").onclick=undoAction; $("btnRedo").onclick=redoAction;
+$("btnCam").onclick=async()=>{ S.facing = S.facing==="user"?"environment":"user"; S.settings.mirror = S.facing==="user"; syncUI();
+  try{ await startCamera(); }catch(e){ toast("無法切換鏡頭"); } };
+$("delBtn").onclick=()=>{ if (S.selected){ doAction({type:"del", s:S.selected}); S.selected=null; toast("已刪除（可按 ↶ 復原）"); } };
+// 清空：確認關卡（Enter 送出 / Esc 取消）
+function openModal(){ $("modal").style.display="flex"; $("modalOk").focus(); }
+function closeModal(){ $("modal").style.display="none"; }
+$("btnClear").onclick=openModal; $("modalCancel").onclick=closeModal;
+$("modalOk").onclick=()=>{ closeModal(); doAction({type:"clear"}); toast("已清空（可按 ↶ 復原）"); };
+window.addEventListener("keydown", e=>{
+  if ($("modal").style.display==="flex"){
+    if (e.key==="Escape"){ e.preventDefault(); closeModal(); }
+    else if (e.key==="Enter"){ e.preventDefault(); $("modalOk").click(); }
+    return;
+  }
+  const mod = e.ctrlKey||e.metaKey;
+  if (mod && e.key.toLowerCase()==="z" && !e.shiftKey){ e.preventDefault(); undoAction(); }
+  else if (mod && (e.key.toLowerCase()==="y" || (e.key.toLowerCase()==="z"&&e.shiftKey))){ e.preventDefault(); redoAction(); }
+  else if ((e.key==="Delete"||e.key==="Backspace") && S.selected){ $("delBtn").click(); }
+});
+
+/* =====================================================================
+   啟動
+   ===================================================================== */
+function setStatus(msg, err=false){ const s=$("status"); s.textContent=msg; s.classList.toggle("err",err); }
+async function begin(useCam){
+  initAudio();
+  $("btnStart").disabled = $("btnTouchOnly").disabled = true;
+  if (!useCam){ S.settings.touch = S.strings.length ? "pluck" : "draw"; $("start").style.display="none"; syncUI(); return; }
+  try{
+    if (!navigator.mediaDevices?.getUserMedia) throw new Error("這個瀏覽器不支援鏡頭存取（需要 HTTPS）");
+    setStatus("開啟鏡頭中…");
+    await startCamera();
+    setStatus("載入手部追蹤模型中（第一次約 5～15 秒）…");
+    landmarker = await loadLandmarker();
+    $("start").style.display="none"; syncUI();
+  }catch(e){
+    console.error(e);
+    const name=e?.name||"";
+    const msg = name==="NotAllowedError" ? "鏡頭權限被拒絕。請到瀏覽器設定允許鏡頭後重新整理。" :
+                name==="NotFoundError" ? "找不到鏡頭。可以先按「只用觸控試玩」。" :
+                (e.message || String(e));
+    setStatus(msg, true);
+    $("btnStart").disabled = $("btnTouchOnly").disabled = false;
+    $("btnStart").textContent="重試";
+  }
+}
+$("btnStart").onclick=()=>begin(true);
+$("btnTouchOnly").onclick=()=>begin(false);
+
+/* ---------- 新版檢查：比對 version.json（timeout + 重試一次） ---------- */
+async function fetchJSON(url, ms=6000){
+  for (let i=0;i<2;i++){
+    const ac=new AbortController(), t=setTimeout(()=>ac.abort(),ms);
+    try{ const r=await fetch(url,{cache:"no-store",signal:ac.signal}); clearTimeout(t);
+      if (r.ok) return await r.json(); if (r.status!==429 && r.status<500) return null; }
+    catch(e){ clearTimeout(t); }
+  }
+  return null;
+}
+async function checkVersion(){
+  if (IS_DEV) return;
+  const d = await fetchJSON("version.json");
+  if (d && d.version && d.version!==VERSION){
+    const t=$("toast"); t.innerHTML='有新版本，<u style="cursor:pointer">點此重新整理</u>'; t.style.opacity=1; t.style.pointerEvents="auto";
+    t.onclick=()=>location.reload(); clearTimeout(toastTimer);
+  }
+}
+setInterval(checkVersion, 5*60*1000);
+
+load(); afterChange(); syncUI();
+requestAnimationFrame(frame);
+window.__airstrings = { S, makeString, doAction, tryPluck, pitchForLength, processHands, hands, get draft(){return draft;} };  // 供測試
+</script>
+</body>
+</html>
