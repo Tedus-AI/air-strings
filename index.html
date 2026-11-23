@@ -193,7 +193,7 @@
       <li><b>拉弦</b>：雙手都用拇指捏住食指往兩邊拉開再放開；或單手捏住拖一段再放開。</li>
       <li><b>撥弦</b>：張開手，用食指或中指劃過弦。撥在弦的兩端聲音較亮，撥在中間較圓。</li>
       <li><b>調整</b>：捏住弦的端點拖動改長短；捏住弦的中段可以整條搬動。</li>
-      <li><b>手勢</b>：撥完後手掌上下抖動＝顫音；握拳＝把所有聲音按住（制音）。</li>
+      <li><b>手勢</b>：撥完後手掌上下抖動＝顫音。</li>
       <li><b>隔空按鈕</b>：手指移到下方工具列的按鈕上，捏一下或停住約 1 秒就會按下。</li>
       <li><b>多人</b>：最多同時追蹤 4 隻手，兩個人可以一起彈。</li>
     </ol>
@@ -347,7 +347,7 @@ const hueForMidi = m => (((m - S.settings.root)%12+12)%12)*30 + 190;
    ===================================================================== */
 let AC=null, master=null, revSend=null, vibGain=null;
 const bufCache = new Map();
-const voices = new Set();      // 正在響的聲音 {src,gn,s,t0}：給顫音與制音用
+const voices = new Set();      // 正在響的聲音 {src,gn,s,t0}：給顫音用
 function initAudio(){
   if (AC) { if (AC.state!=="running") AC.resume(); return; }
   AC = new (window.AudioContext||window.webkitAudioContext)();
@@ -418,12 +418,6 @@ function playPluck(s, vel, t){
   voices.add(v);
   src.onended = () => { voices.delete(v); try{ vibGain && vibGain.disconnect(src.playbackRate); }catch(e){} };
   src.start();
-}
-function muteAll(){
-  if (!AC) return;
-  const t = AC.currentTime;
-  for (const v of voices){ v.gn.gain.cancelScheduledValues(t); v.gn.gain.setTargetAtTime(0, t, 0.03); }
-  for (const s of S.strings) s.muteT = 0.25;
 }
 
 /* =====================================================================
@@ -576,7 +570,7 @@ function tryPluck(key, a, b, now){
     if (now - (s.lastPluck[key]||0) < PLUCK_COOLDOWN_MS) continue;
     s.lastPluck[key]=now; hits++;
     const vel = Math.min(1, dist/(DIAG*0.035));
-    s.amp = Math.min(1.4, s.amp + 0.5 + vel*0.7); s.phase = 0; s.hitT = hit.t; s.muteT = 0;
+    s.amp = Math.min(1.4, s.amp + 0.5 + vel*0.7); s.phase = 0; s.hitT = hit.t;
     playPluck(s, vel, hit.t);
     burst(x1+(x2-x1)*hit.t, y1+(y2-y1)*hit.t, s.hue, 10+Math.round(vel*14), 0.5+vel);
     onPlucked(s, hit.t, now);
@@ -687,13 +681,12 @@ function updateHand(key, h, pts, now){
   h.pts = pts; h.lastSeen = now; h.scale = scale;
   h.pinchR = dist2(pts[4],pts[8])/scale;
   h.pinchPt = [(pts[4][0]+pts[8][0])/2, (pts[4][1]+pts[8][1])/2];
-  // 握拳：四根手指「全部」收回才算（看最遠的一根）；而且拇指沒碰食指尖，或食指尖已折回到食指根部。
+  // 握拳（打地鼠的槌子）：四根手指「全部」收回才算（看最遠的一根）；而且拇指沒碰食指尖，或食指尖已折回到食指根部。
   // → 捏合時食指是伸出去的，不會被誤判成握拳；真的握拳時拇指靠在食指旁也照樣算拳頭
   const curl = Math.max(...[8,12,16,20].map(i=>dist2(pts[i],pts[0])))/scale;
   const idxFold = dist2(pts[8],pts[5])/scale;
   const wasFist = h.fist;
   h.fist = (wasFist ? curl < FIST_OFF : curl < FIST_ON) && (h.pinchR > PINCH_ON || idxFold < 0.65);
-  if (h.fist && !wasFist && !Game.active?.noFistMute) muteAll();   // 打地鼠時握拳是拿槌子，不制音
   // 隔空操作介面：捏合點落在按鈕／選單上時，捏一下＝點擊，停住不動＝自動點擊
   const ui = h.fist ? null : uiTargetAt(h.pinchPt[0], h.pinchPt[1]);   // 拳頭（打地鼠的槌子）不操作介面
   // 捏合（握拳時不算捏）；放開需連續數格才成立，避免快速拉弦時中斷
@@ -1344,7 +1337,7 @@ const MOLE_TYPES = {
   normal:{ pts:10 }, gold:{ pts:50 }, helmet:{ pts:20 }, rabbit:{ pts:-20 },
 };
 GAMES.mole = {
-  id:"mole", title:"音樂打地鼠", noFistMute:true,
+  id:"mole", title:"音樂打地鼠",
   start(mode){
     this.mode = SONGS[mode] ? mode : "free";
     this.song = SONGS[mode] || null;
@@ -1684,7 +1677,6 @@ function drawVideo(){
 function drawString(s, dt){
   const [x1,y1]=toPx(s.u1,s.v1),[x2,y2]=toPx(s.u2,s.v2);
   const dx=x2-x1, dy=y2-y1, L=Math.hypot(dx,dy)||1, nx=-dy/L, ny=dx/L;
-  if (s.muteT>0){ s.muteT-=dt; s.amp *= Math.exp(-dt/0.05); }
   s.amp *= Math.exp(-dt/0.9); if (s.amp<0.002) s.amp=0;
   s.phase += dt;
   const visF = Math.min(16, 4 + s.freq/45);
@@ -1773,13 +1765,7 @@ function drawHands(){
       for (const p of pts){ g.beginPath(); g.arc(p[0],p[1],2.6,0,Math.PI*2); g.fill(); }
     }
     const c=pts[9]; g.font="700 13px -apple-system,system-ui,sans-serif"; g.textAlign="center";
-    if (h.fist && Game.active?.noFistMute){ g.textAlign="start"; continue; }   // 打地鼠：拳頭由遊戲畫成槌子
-    if (h.fist){   // 制音
-      g.strokeStyle="rgba(255,120,120,0.9)"; g.lineWidth=3;
-      g.beginPath(); g.arc(c[0],c[1],h.scale*0.9,0,Math.PI*2); g.stroke();
-      g.fillStyle="rgba(255,160,160,0.95)"; g.fillText("✊ 制音", c[0], c[1]-h.scale*0.9-6); g.textAlign="start";
-      continue;
-    }
+    if (h.fist){ g.textAlign="start"; continue; }   // 拳頭不撥弦也不捏（打地鼠時由遊戲畫成槌子）
     if (h.shake){ g.fillStyle="rgba(200,230,255,0.95)"; g.fillText("〰 顫音", c[0], c[1]+h.scale*0.9+14); }
     g.textAlign="start";
     // 捏合指示環
