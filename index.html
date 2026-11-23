@@ -271,6 +271,10 @@ const MAX_STRINGS = 16;
 const PINCH_ON = 0.33, PINCH_OFF = 0.48;   // 捏合判定（拇指-食指距離 / 手掌大小），有遲滯
 const FIST_ON = 1.15, FIST_OFF = 1.35;     // 握拳判定（四指指尖到手腕「最遠」距離 / 手掌大小），有遲滯
 const PINCH_RELEASE_FRAMES = 2;            // 連續幾格張開才算放開（手快速移動時不會中斷拉弦）
+const HOLD_RELEASE_FRAMES = 4;             // 正抓著弦／拉弦時更寬容：連續 4 格才算放開
+const PINCH_OFF_HOLD = 0.62;               // 正抓著弦時「放開」的距離門檻放寬（移動模糊時拇指食指看起來會分開）
+const HOLD_LOST_GRACE_MS = 400;            // 正抓著弦的手短暫追蹤不到時，最多等 0.4 秒再放開
+const GRAB_SNAP_MS = 120;                  // 抓住端點後，端點在這段時間內滑到手指上
 const AIR_DWELL_MS = 1100;                 // 隔空操作：手指停在按鈕上多久自動點下
 const MAX_HANDS = 4;
 const LOST_GRACE_MS = 140;     // 手短暫消失的容忍時間
@@ -633,6 +637,8 @@ function lmToScreen(lm, m){
 }
 const dist2 = (a,b)=>Math.hypot(a[0]-b[0],a[1]-b[1]);
 
+const isHolding = key => grabs.has(key) || !!(draft && (draft.a===key || draft.b===key));
+const graceFor = key => isHolding(key) ? HOLD_LOST_GRACE_MS : LOST_GRACE_MS;
 function dropHand(key){
   const h = hands.get(key); if (!h) return;
   if (h.pinched && !h.uiPinch) onPinchEnd(key);
@@ -664,7 +670,7 @@ function processHands(res, now){
     }
     updateHand(key, hands.get(key), d.pts, now);
   });
-  for (const [key,h] of hands) if (now - h.lastSeen > LOST_GRACE_MS) dropHand(key);
+  for (const [key,h] of hands) if (now - h.lastSeen > graceFor(key)) dropHand(key);
   // 撥弦：沒有在捏、沒握拳的手，用食指與中指指尖
   for (const [key,h] of hands){
     if (h.lastSeen !== now) continue;
@@ -688,13 +694,18 @@ function updateHand(key, h, pts, now){
   const curl = Math.max(...[8,12,16,20].map(i=>dist2(pts[i],pts[0])))/scale;
   const idxFold = dist2(pts[8],pts[5])/scale;
   const wasFist = h.fist;
-  h.fist = (wasFist ? curl < FIST_OFF : curl < FIST_ON) && (h.pinchR > PINCH_ON || idxFold < 0.65);
+  h.fist = (wasFist ? curl < FIST_OFF : curl < FIST_ON) && (h.pinchR > PINCH_ON || idxFold < 0.65)
+           && !(h.pinched && h.pinchR < PINCH_OFF_HOLD);   // 正在捏（拿著弦）時，彎曲的手指不會被當成握拳而鬆手
   // 隔空操作介面：捏合點落在按鈕／選單上時，捏一下＝點擊，停住不動＝自動點擊
   const ui = h.fist ? null : uiTargetAt(h.pinchPt[0], h.pinchPt[1]);   // 拳頭（打地鼠的槌子）不操作介面
   // 捏合（握拳時不算捏）；放開需連續數格才成立，避免快速拉弦時中斷
   const wasPinched = h.pinched;
   let pin;
-  if (wasPinched){ h.offN = h.pinchR >= PINCH_OFF ? (h.offN||0)+1 : 0; pin = h.offN < PINCH_RELEASE_FRAMES; }
+  if (wasPinched){
+    const hold = isHolding(key);
+    h.offN = h.pinchR >= (hold ? PINCH_OFF_HOLD : PINCH_OFF) ? (h.offN||0)+1 : 0;
+    pin = h.offN < (hold ? HOLD_RELEASE_FRAMES : PINCH_RELEASE_FRAMES);
+  }
   else pin = h.pinchR < PINCH_ON;
   h.pinched = !h.fist && pin; if (!h.pinched) h.offN = 0;
   if (!wasPinched && h.pinched){
@@ -812,7 +823,7 @@ function nearestBody(x,y,maxD){
   return best;
 }
 function grabString(key, s, end, p){
-  grabs.set(key, { s, end, from:getEnd(s,end), p0:p.slice(), lastMidi:s.midi, lastTick:0 });
+  grabs.set(key, { s, end, from:getEnd(s,end), p0:p.slice(), t0:performance.now(), lastMidi:s.midi, lastTick:0 });
   S.selected = null;
 }
 function startGrab(key, p, allowBody=true){
@@ -830,8 +841,10 @@ function moveGrab(key, p){
     const du = clamp((p[0]-gr.p0[0])/W, -Math.min(u1,u2), 1-Math.max(u1,u2));
     const dv = clamp((p[1]-gr.p0[1])/H, -Math.min(v1,v2), 1-Math.max(v1,v2));
     s.u1=u1+du; s.v1=v1+dv; s.u2=u2+du; s.v2=v2+dv;
-  } else {   // 端點跟著手的位移走（不會一抓就跳到手的位置）
-    const uv = [clamp(gr.from[0]+(p[0]-gr.p0[0])/W,0,1), clamp(gr.from[1]+(p[1]-gr.p0[1])/H,0,1)];
+  } else {   // 端點黏在捏合點上：抓住瞬間的距離在 0.12 秒內平滑收掉，之後端點就在手指上
+    const k = Math.exp(-(now - gr.t0)/GRAB_SNAP_MS);
+    const ox = (gr.from[0]*W - gr.p0[0])*k, oy = (gr.from[1]*H - gr.p0[1])*k;
+    const uv = [clamp((p[0]+ox)/W,0,1), clamp((p[1]+oy)/H,0,1)];
     if (gr.end===1){ s.u1=uv[0]; s.v1=uv[1]; } else { s.u2=uv[0]; s.v2=uv[1]; }
   }
   Game.active?.clampGrab?.(s, gr);
@@ -1818,7 +1831,7 @@ function frame(){
     try{ processHands(landmarker.detectForVideo(video, now), now); detN++; }catch(e){ console.warn(e); }
   } else if (landmarker && camReady){
     // 沒有新影格：仍檢查手是否消失
-    for (const [key,h] of hands) if (now-h.lastSeen>LOST_GRACE_MS) dropHand(key);
+    for (const [key,h] of hands) if (now-h.lastSeen>graceFor(key)) dropHand(key);
   }
   updateVibrato(dt);
   const gm = Game.active;
@@ -1959,14 +1972,21 @@ async function fetchJSON(url, ms=6000){
   }
   return null;
 }
+// GitHub Pages 的 HTML 會被瀏覽器快取最多 10 分鐘 → 用不同網址（?v=版本）載入新版即可跳過快取
+function goLatest(v){ const u = new URL(location.href); u.searchParams.set("v", v); location.replace(u.toString()); }
 async function checkVersion(){
   if (IS_DEV) return;
-  const d = await fetchJSON("version.json");
-  if (d && d.version && d.version!==VERSION){
-    const t=$("toast"); t.innerHTML='有新版本，<u style="cursor:pointer">點此重新整理</u>'; t.style.opacity=1; t.style.pointerEvents="auto";
-    t.onclick=()=>location.reload(); clearTimeout(toastTimer);
-  }
+  const d = await fetchJSON("version.json?t=" + Date.now());
+  if (!d?.version || d.version===VERSION) return;
+  const notStarted = $("start").style.display !== "none";
+  const alreadyTried = new URL(location.href).searchParams.get("v") === d.version;   // 防止 CDN 尚未更新時無限重整
+  if (notStarted && !alreadyTried){ goLatest(d.version); return; }                     // 還沒開始玩：直接換成新版
+  const t=$("toast"); t.innerHTML='<button id="btnUpdate" class="on">🔄 有新版本，點此更新</button>';
+  t.style.opacity=1; t.style.pointerEvents="auto"; clearTimeout(toastTimer);
+  $("btnUpdate").onclick=()=>goLatest(d.version);
 }
+checkVersion();                                                                     // 一打開就檢查
+document.addEventListener("visibilitychange", ()=>{ if (!document.hidden) checkVersion(); });   // 切回這個頁面時再檢查
 setInterval(checkVersion, 5*60*1000);
 
 load(); afterChange(); syncUI();
