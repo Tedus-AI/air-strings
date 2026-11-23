@@ -646,7 +646,9 @@ function processHands(res, now){
   // 多隻手：用手腕位置配對上一格的手，避免 4 隻手時身分互換
   const pairs = [];
   for (const [key,h] of hands) dets.forEach((d,j)=>{
-    const c = dist2(h.pts[0], d.pts[0]) + (h.label===d.label ? 0 : DIAG*0.08);
+    const sideOf = Game.active?.sideOf;
+    const c = dist2(h.pts[0], d.pts[0]) + (h.label===d.label ? 0 : DIAG*0.08)
+            + (sideOf && sideOf(h.pts[0]) !== sideOf(d.pts[0]) ? DIAG : 0);   // 對戰：手的身分不跨中線，兩位玩家的手不會互換
     if (c < DIAG*0.3) pairs.push([c,key,j]);
   });
   pairs.sort((a,b)=>a[0]-b[0]);
@@ -668,7 +670,7 @@ function processHands(res, now){
     if (h.lastSeen !== now) continue;
     for (const tip of PLUCK_TIPS){
       const cur = h.pts[tip], prev = h.tips[tip];
-      if (prev && !h.pinched && !h.fist && !grabs.has(key) && !(draft && (draft.a===key||draft.b===key))) tryPluck(key+tip, prev, cur, now);
+      if (prev && !Game.active?.noPluck && !h.pinched && !h.fist && !grabs.has(key) && !(draft && (draft.a===key||draft.b===key))) tryPluck(key+tip, prev, cur, now);
       h.tips[tip] = cur;
     }
   }
@@ -821,6 +823,7 @@ function startGrab(key, p, allowBody=true){
 }
 function moveGrab(key, p){
   const gr = grabs.get(key); if (!gr) return;
+  if (Game.active?.canMove && !Game.active.canMove(key, gr)){ endGrab(key); return; }   // 對戰：手跨到對方半場就自動放開
   const s = gr.s, now = performance.now();
   if (gr.end===0){   // 整條平移，不讓它跑出畫面
     const [u1,v1,u2,v2] = gr.from;
@@ -911,7 +914,7 @@ cv.addEventListener("pointermove", e=>{
   const p=[e.clientX,e.clientY], now=performance.now(), key="p"+e.pointerId;
   if (dist2(p,st.start)>8) st.moved=true;
   if (grabs.has(key)){ moveGrab(key,p); st.last=p; return; }
-  if (tryPluck(key, st.last, p, now)) st.plucked=true;
+  if (!Game.active?.noPluck && tryPluck(key, st.last, p, now)) st.plucked=true;
   if (draft && draft.a===key){ if (st.plucked) draft=null; else draft.p2=p.slice(); }
   st.last=p;
 });
@@ -1156,7 +1159,7 @@ GAMES.keeper = {
 const VERSUS_WIN = 7;
 const VERSUS_HUES = [205, 330];
 GAMES.versus = {
-  id:"versus", title:"守護球對戰",
+  id:"versus", title:"守護球對戰", noPluck:true,
   start(){
     Object.assign(this, { score:[0,0], over:false, time:0, rally:0, maxRally:0, flash:[0,0], prevPos:null, lastHitSide:-1 });
     const ph = playH(), y = ph*0.78, m = W*0.07;
@@ -1172,9 +1175,16 @@ GAMES.versus = {
   half(side){ const m = 6; return side===0 ? [m, W/2-m] : [W/2+m, W-m]; },
   ensureStrings(){ this.str.forEach(s=>{ if (!S.strings.includes(s)) S.strings.push(s); }); },
   // 這一局所有的捏／按都由對戰接管：只能抓自己半場那條弦
+  // 每隻手屬於「手腕所在」的那一邊（觸控：按下的位置），只能抓自己那一邊的弦；伸過中線去捏一律無效
+  sideOf(pt){ return pt[0] < W/2 ? 0 : 1; },
+  ownerSide(key, p){ const h = hands.get(key); return h?.pts ? this.sideOf(h.pts[0]) : this.sideOf(p); },
+  canMove(key, gr){ const h = hands.get(key); return !h?.pts || this.sideOf(h.pts[0]) === gr.s.side; },
+  handHue(h){ return h.pts ? VERSUS_HUES[this.sideOf(h.pts[0])] : null; },
   capturePinch(key, p){
     this.ensureStrings();
-    const side = p[0] < W/2 ? 0 : 1, s = this.str[side];
+    const side = this.ownerSide(key, p);
+    if (this.sideOf(p) !== side) return true;                   // 手伸過中線：忽略
+    const s = this.str[side];
     const mine = [...grabs.values()].filter(gr=>gr.s===s);
     if (mine.some(gr=>gr.end===0)) return true;                 // 已被整條抓著
     const [x1,y1]=toPx(s.u1,s.v1), [x2,y2]=toPx(s.u2,s.v2);
@@ -1199,7 +1209,7 @@ GAMES.versus = {
     } else { x1=clamp(x1,lo,hi); x2=clamp(x2,lo,hi); y1=clamp(y1,top,bot); y2=clamp(y2,top,bot); }
     s.u1=x1/W; s.v1=y1/H; s.u2=x2/W; s.v2=y2/H;
   },
-  hint(){ return this.time<4 ? (camMode() ? "左右各一人：雙手捏住自己弦的兩端，拉長、縮短、帶著跑，揮弦把球打回去！"
+  hint(){ return this.time<4 ? (camMode() ? "左右各一人：各自只能控制自己那半邊的弦（手的顏色＝所屬方），雙手捏住弦的兩端揮弦把球打回去！"
                                           : "左右各一人：按住自己弦的端點或中段拖動，揮弦把球打回去！") : ""; },
   hud(){ return `🔵 <b>${this.score[0]}</b> : <b>${this.score[1]}</b> 🔴　先得 ${VERSUS_WIN} 分獲勝　來回 ${this.rally}`; },
   update(dt){
@@ -1759,7 +1769,7 @@ function drawHands(){
   for (const [,h] of hands){
     const pts=h.pts; if (!pts) continue;
     if (S.settings.skel){
-      g.strokeStyle=`hsla(${h.hue},90%,70%,0.65)`; g.lineWidth=2;
+      g.strokeStyle=`hsla(${Game.active?.handHue?.(h) ?? h.hue},90%,70%,0.65)`; g.lineWidth=2;
       for (const [a,b] of HAND_LINKS){ g.beginPath(); g.moveTo(...pts[a]); g.lineTo(...pts[b]); g.stroke(); }
       g.fillStyle="rgba(255,110,110,0.9)";
       for (const p of pts){ g.beginPath(); g.arc(p[0],p[1],2.6,0,Math.PI*2); g.fill(); }
