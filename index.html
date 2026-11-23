@@ -23,25 +23,28 @@
   #hud{position:fixed;left:12px;top:calc(10px + var(--safe-t));display:flex;gap:8px;flex-wrap:wrap;pointer-events:none;max-width:calc(100vw - 24px)}
   .chip{background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:4px 10px;font-size:12px;color:var(--muted);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
   .chip b{color:var(--text);font-weight:600}
-  #hint{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(84px + var(--safe-b));background:var(--panel);border:1px solid var(--line);
+  #hint{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(58px + var(--safe-b));background:var(--panel);border:1px solid var(--line);
     border-radius:12px;padding:8px 14px;font-size:14px;max-width:min(92vw,560px);text-align:center;pointer-events:none;transition:opacity .4s}
-  /* ---------- Bottom bar ---------- */
-  #bar{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(12px + var(--safe-b));display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:center;
-    background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:6px 8px;max-width:calc(100vw - 16px);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
-  #bar .grp{display:flex;align-items:center;gap:4px}
+  /* ---------- Bottom bar：貼齊底部、單排、放不下就橫向捲動 ---------- */
+  #bar{position:fixed;left:0;right:0;bottom:0;display:flex;gap:6px;align-items:center;flex-wrap:nowrap;justify-content:safe center;
+    overflow-x:auto;overflow-y:hidden;scrollbar-width:none;touch-action:pan-x;
+    background:var(--panel);border-top:1px solid var(--line);padding:4px max(8px,env(safe-area-inset-left,0px)) calc(4px + var(--safe-b)) max(8px,env(safe-area-inset-right,0px));
+    backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+  #bar::-webkit-scrollbar{display:none}
+  #bar .grp{display:flex;align-items:center;gap:4px;flex:none}
   #bar label{font-size:12px;color:var(--muted);margin-left:4px}
   select,button{font:inherit;color:var(--text);background:rgba(255,255,255,.06);border:1px solid var(--line);border-radius:9px;padding:6px 10px;min-height:36px;cursor:pointer}
   select{padding-right:6px}
   button:hover,select:hover{background:rgba(255,255,255,.12)}
   button:disabled{opacity:.35;cursor:default}
   button.on{background:rgba(127,227,255,.18);border-color:rgba(127,227,255,.55);color:#dff8ff}
-  .sep{width:1px;height:24px;background:var(--line);margin:0 2px}
+  .sep{width:1px;height:24px;background:var(--line);margin:0 2px;flex:none}
   select,button{white-space:nowrap}
-  @media (max-width:600px){
-    #bar{gap:4px;padding:5px 6px;width:calc(100vw - 12px)}
+  @media (max-width:760px){
+    #bar{gap:4px;justify-content:flex-start}
     #bar label,.sep{display:none}
     select,button{padding:5px 7px;min-height:34px;font-size:13px}
-    #hint{bottom:calc(122px + var(--safe-b));font-size:13px}
+    #hint{bottom:calc(54px + var(--safe-b));font-size:13px}
   }
   /* ---------- Start overlay ---------- */
   #start{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:20px;
@@ -99,10 +102,9 @@
   </div>
   <div class="sep"></div>
   <div class="grp">
-    <button id="btnTouch" title="觸控／滑鼠操作模式">觸控：撥弦</button>
     <button id="btnSkel" class="on" title="顯示手部骨架">骨架</button>
-    <button id="btnMirror" class="on" title="鏡像畫面">鏡像</button>
     <button id="btnCam" title="切換前後鏡頭" disabled>換鏡頭</button>
+    <button id="btnFull" title="全螢幕">⛶ 全螢幕</button>
   </div>
   <div class="sep"></div>
   <div class="grp">
@@ -119,6 +121,7 @@
     <ol>
       <li><b>拉弦</b>：雙手都用拇指捏住食指，往兩邊拉開再放開，弦就留在空中。單手捏住拖曳也可以。</li>
       <li><b>撥弦</b>：張開手，用食指或中指劃過弦。</li>
+      <li><b>調整</b>：捏住已經拉好的弦的端點，就能再拖動改變長短與位置。</li>
       <li><b>音高</b>：弦越長音越低，預設自動對齊到五聲音階，怎麼彈都好聽。</li>
     </ol>
     <div class="btns">
@@ -173,6 +176,7 @@ const PLUCK_COOLDOWN_MS = 110;
 const HAND_LINKS = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],
   [9,13],[13,14],[14,15],[15,16],[13,17],[0,17],[17,18],[18,19],[19,20]];
 const PLUCK_TIPS = [8,12];
+const GRAB_PX = () => Math.max(30, DIAG*0.035);   // 捏住端點的判定半徑
 
 for (let i=0;i<12;i++){ const o=document.createElement("option"); o.value=i; o.textContent=NOTE_NAMES[i]; $("selRoot").appendChild(o); }
 
@@ -181,7 +185,7 @@ for (let i=0;i<12;i++){ const o=document.createElement("option"); o.value=i; o.t
    ===================================================================== */
 const S = {
   strings: [],          // {id,u1,v1,u2,v2,midi,freq,amp,phase,lastPluck,hue,created}
-  settings: { scale:"penta", root:0, tone:"guitar", skel:true, mirror:true, touch:"pluck" },
+  settings: { scale:"penta", root:0, tone:"guitar", skel:true },
   undo: [], redo: [],
   selected: null,
   facing: "user",
@@ -304,6 +308,7 @@ function doAction(act, record=true){
   if (act.type==="add"){ S.strings.push(act.s); if (S.strings.length>MAX_STRINGS){ const old=S.strings.shift(); act.evicted=old; } }
   else if (act.type==="del"){ act.index = S.strings.findIndex(x=>x.id===act.s.id); if (act.index>=0) S.strings.splice(act.index,1); }
   else if (act.type==="clear"){ act.list = S.strings.slice(); S.strings.length=0; }
+  else if (act.type==="edit"){ setEnd(act.s, act.end, act.to); }
   if (record){ S.undo.push(act); S.redo.length=0; }
   afterChange();
 }
@@ -312,6 +317,7 @@ function undoAction(){
   if (act.type==="add"){ const i=S.strings.findIndex(x=>x.id===act.s.id); if(i>=0) S.strings.splice(i,1); if (act.evicted) S.strings.unshift(act.evicted); }
   else if (act.type==="del"){ S.strings.splice(Math.max(0,Math.min(act.index,S.strings.length)),0,act.s); }
   else if (act.type==="clear"){ S.strings.push(...act.list); }
+  else if (act.type==="edit"){ setEnd(act.s, act.end, act.from); }
   S.redo.push(act); afterChange(); toast("已復原");
 }
 function redoAction(){ const act=S.redo.pop(); if(!act) return; doAction(act,false); S.undo.push(act); toast("已重做"); }
@@ -322,6 +328,11 @@ function afterChange(){
   $("hStrings").textContent = S.strings.length;
   save(); updateHint();
 }
+function setEnd(s, end, uv){
+  if (end===1){ s.u1=uv[0]; s.v1=uv[1]; } else { s.u2=uv[0]; s.v2=uv[1]; }
+  retune(s);
+}
+function retune(s){ const p=pitchForLength(lenOf(s)); s.midi=p.midi; s.freq=p.freq; s.hue=hueForMidi(p.midi); }
 function retuneAll(){
   for (const s of S.strings){ const p=pitchForLength(lenOf(s)); s.midi=p.midi; s.freq=p.freq; s.hue=hueForMidi(p.midi); }
   save();
@@ -337,7 +348,8 @@ function save(){
 function load(){
   try{
     const d = JSON.parse(localStorage.getItem(STORE_KEY)||"null"); if (!d) return;
-    Object.assign(S.settings, d.settings||{});
+    const { scale, root, tone, skel } = d.settings||{};
+    Object.assign(S.settings, Object.fromEntries(Object.entries({scale,root,tone,skel}).filter(([,v])=>v!==undefined)));
     for (const x of (d.strings||[])) S.strings.push({ ...x, id:nextId++, amp:0, phase:0, lastPluck:{}, created:0 });
   }catch(e){}
 }
@@ -354,13 +366,14 @@ function segHit(ax,ay,bx,by, cx,cy,dx,dy){
 const particles = [];
 function tryPluck(key, a, b, now){
   const dx=b[0]-a[0], dy=b[1]-a[1], dist=Math.hypot(dx,dy);
-  if (dist<2 || dist>DIAG*0.25) return;          // 太小=沒動，太大=追蹤跳動
+  if (dist<2 || dist>DIAG*0.25) return 0;        // 太小=沒動，太大=追蹤跳動
+  let hits = 0;
   for (const s of S.strings){
     if (now - s.created < 250) continue;
     const [x1,y1]=toPx(s.u1,s.v1), [x2,y2]=toPx(s.u2,s.v2);
     const hit = segHit(a[0],a[1],b[0],b[1], x1,y1,x2,y2); if (!hit) continue;
     if (now - (s.lastPluck[key]||0) < PLUCK_COOLDOWN_MS) continue;
-    s.lastPluck[key]=now;
+    s.lastPluck[key]=now; hits++;
     const vel = Math.min(1, dist/(DIAG*0.035));
     s.amp = Math.min(1.4, s.amp + 0.5 + vel*0.7); s.phase = 0; s.hitT = hit.t;
     playPluck(s, vel, hit.t);
@@ -370,6 +383,7 @@ function tryPluck(key, a, b, now){
       particles.push({x:px,y:py,vx:Math.cos(ang)*sp,vy:Math.sin(ang)*sp,life:1,hue:s.hue});
     }
   }
+  return hits;
 }
 
 /* =====================================================================
@@ -378,7 +392,8 @@ function tryPluck(key, a, b, now){
 const video = $("cam");
 let landmarker=null, camStream=null, lastVideoTime=-1, camReady=false;
 const hands = new Map();   // key -> {pts, pinched, pinchPt, lastSeen, tips:{}}
-let draft = null;          // {mode:'one'|'two', a, b, p1, p2}
+let draft = null;          // {mode:'one'|'two'|'ptr', a, b, p1, p2}
+const grabs = new Map();   // 手或指標 key -> {s, end, from:[u,v]}：正在調整的弦端點
 
 function withTimeout(p, ms, label){
   let t; return Promise.race([p, new Promise((_,rej)=>{ t=setTimeout(()=>rej(new Error(label+" 逾時")),ms); })]).finally(()=>clearTimeout(t));
@@ -411,9 +426,10 @@ function coverMap(){
   const s=Math.max(W/vw,H/vh); return { s, ox:(W-vw*s)/2, oy:(H-vh*s)/2, vw, vh };
 }
 function lmToScreen(lm, m){
-  const x = S.settings.mirror ? (1-lm.x) : lm.x;
+  const x = isMirror() ? (1-lm.x) : lm.x;
   return [m.ox + x*m.vw*m.s, m.oy + lm.y*m.vh*m.s];
 }
+function isMirror(){ return S.facing==="user"; }   // 前鏡頭自動鏡像
 const dist2 = (a,b)=>Math.hypot(a[0]-b[0],a[1]-b[1]);
 
 function processHands(res, now){
@@ -434,25 +450,67 @@ function processHands(res, now){
     if (wasPinched && !h.pinched) onPinchEnd(key);
   });
   for (const [key,h] of hands){
-    if (now - h.lastSeen > LOST_GRACE_MS){ if (h.pinched) onPinchEnd(key); hands.delete(key); }
+    if (now - h.lastSeen > LOST_GRACE_MS){ if (h.pinched) onPinchEnd(key); grabs.has(key)&&endGrab(key); hands.delete(key); }
   }
   // 撥弦：沒有在捏的手，用食指與中指指尖
   for (const [key,h] of hands){
     if (h.lastSeen !== now) continue;
     for (const tip of PLUCK_TIPS){
       const cur = h.pts[tip], prev = h.tips[tip];
-      if (prev && !h.pinched && !(draft && (draft.a===key||draft.b===key))) tryPluck(key+tip, prev, cur, now);
+      if (prev && !h.pinched && !grabs.has(key) && !(draft && (draft.a===key||draft.b===key))) tryPluck(key+tip, prev, cur, now);
       h.tips[tip] = cur;
     }
   }
+  for (const [key,h] of hands) if (grabs.has(key) && h.pinched) moveGrab(key, h.pinchPt);
   if (draft) updateDraft();
   $("hHands").textContent = hands.size;
 }
+/* ---------- 調整已建立的弦：捏住端點拖動 ---------- */
+function nearestEnd(x,y){
+  let best=null, bd=GRAB_PX();
+  for (const s of S.strings){
+    for (const end of [1,2]){
+      if ([...grabs.values()].some(g=>g.s===s&&g.end===end)) continue;   // 已被別隻手抓住
+      const [px,py] = end===1 ? toPx(s.u1,s.v1) : toPx(s.u2,s.v2);
+      const d = Math.hypot(x-px,y-py); if (d<bd){ bd=d; best={s,end}; }
+    }
+  }
+  return best;
+}
+function startGrab(key, p){
+  const hit = nearestEnd(p[0],p[1]); if (!hit) return false;
+  const { s, end } = hit;
+  grabs.set(key, { s, end, from: end===1 ? [s.u1,s.v1] : [s.u2,s.v2], lastMidi:s.midi, lastTick:0 });
+  S.selected = null;
+  return true;
+}
+function moveGrab(key, p){
+  const gr = grabs.get(key); if (!gr) return;
+  const s = gr.s, uv = [Math.max(0,Math.min(1,p[0]/W)), Math.max(0,Math.min(1,p[1]/H))];
+  if (gr.end===1){ s.u1=uv[0]; s.v1=uv[1]; } else { s.u2=uv[0]; s.v2=uv[1]; }
+  retune(s); s.created = performance.now();      // 調整中不會被誤撥
+  // 音高改變時輕輕響一下，像在調音
+  const now = performance.now();
+  if (s.midi!==gr.lastMidi && now-gr.lastTick>70){ gr.lastMidi=s.midi; gr.lastTick=now; s.amp=Math.max(s.amp,0.25); playPluck(s,0.18,0.5); }
+}
+function endGrab(key){
+  const gr = grabs.get(key); if (!gr) return; grabs.delete(key);
+  const s = gr.s, to = gr.end===1 ? [s.u1,s.v1] : [s.u2,s.v2];
+  if (!S.strings.includes(s)) return;
+  if (lenOf(s) < MIN_LEN){ setEnd(s, gr.end, gr.from); toast("太短了，已還原"); return; }
+  if (Math.hypot((to[0]-gr.from[0])*W,(to[1]-gr.from[1])*H) < 3){ setEnd(s, gr.end, gr.from); return; }
+  doAction({ type:"edit", s, end:gr.end, from:gr.from, to });
+  s.amp = 0.5; playPluck(s, 0.35, 0.5);
+}
+
 function onPinchStart(key, h){
+  if (draft && !draft.b && draft.a!==key && draft.mode!=="ptr"){ draft.mode="two"; draft.b=key; return; }
+  if (startGrab(key, h.pinchPt)) return;
   if (!draft){ draft = { mode:"one", a:key, b:null, p1:h.pinchPt.slice(), p2:h.pinchPt.slice() }; S.selected=null; }
   else if (!draft.b && draft.a!==key){ draft.mode="two"; draft.b=key; }
 }
 function onPinchEnd(key){
+  if (grabs.has(key)){ endGrab(key); return; }
   if (!draft || (draft.a!==key && draft.b!==key)) return;
   commitDraft();
 }
@@ -485,23 +543,28 @@ function nearestString(x,y,maxD){
   }
   return best;
 }
+// 觸控／滑鼠不分模式：按在弦端點上 → 調整；劃過弦 → 撥弦；在空白處拖曳 → 拉出新弦
 cv.addEventListener("pointerdown", e=>{
   initAudio(); cv.setPointerCapture(e.pointerId);
-  const p=[e.clientX,e.clientY];
-  ptr.set(e.pointerId,{ start:p, last:p, t0:performance.now(), moved:false });
-  if (S.settings.touch==="draw" && !draft) draft = { mode:"ptr", a:"p"+e.pointerId, p1:p.slice(), p2:p.slice() };
+  const p=[e.clientX,e.clientY], key="p"+e.pointerId;
+  ptr.set(e.pointerId,{ start:p, last:p, t0:performance.now(), moved:false, plucked:false });
+  if (startGrab(key, p)) return;
+  if (!draft) draft = { mode:"ptr", a:key, p1:p.slice(), p2:p.slice() };
 });
 cv.addEventListener("pointermove", e=>{
   const st=ptr.get(e.pointerId); if(!st) return;
-  const p=[e.clientX,e.clientY], now=performance.now();
+  const p=[e.clientX,e.clientY], now=performance.now(), key="p"+e.pointerId;
   if (dist2(p,st.start)>8) st.moved=true;
-  if (draft && draft.a==="p"+e.pointerId) draft.p2=p.slice();
-  else if (S.settings.touch==="pluck") tryPluck("p"+e.pointerId, st.last, p, now);
+  if (grabs.has(key)){ moveGrab(key,p); st.last=p; return; }
+  if (tryPluck(key, st.last, p, now)) st.plucked=true;
+  if (draft && draft.a===key){ if (st.plucked) draft=null; else draft.p2=p.slice(); }
   st.last=p;
 });
 function endPtr(e){
   const st=ptr.get(e.pointerId); if(!st) return; ptr.delete(e.pointerId);
-  if (draft && draft.a==="p"+e.pointerId){ commitDraft(); return; }
+  const key="p"+e.pointerId;
+  if (grabs.has(key)){ endGrab(key); return; }
+  if (draft && draft.a===key){ const ok = st.moved && !st.plucked; if (ok){ commitDraft(); return; } draft=null; }
   if (!st.moved && performance.now()-st.t0<350){
     S.selected = nearestString(e.clientX,e.clientY,26);
   }
@@ -518,8 +581,8 @@ function drawVideo(){
     gr.addColorStop(0,"#152033"); gr.addColorStop(1,"#07080c"); g.fillStyle=gr; g.fillRect(0,0,W,H); return;
   }
   const m=coverMap(); g.save();
-  if (S.settings.mirror){ g.translate(W,0); g.scale(-1,1); }
-  g.drawImage(video, S.settings.mirror ? W-m.ox-m.vw*m.s : m.ox, m.oy, m.vw*m.s, m.vh*m.s);
+  if (isMirror()){ g.translate(W,0); g.scale(-1,1); }
+  g.drawImage(video, isMirror() ? W-m.ox-m.vw*m.s : m.ox, m.oy, m.vw*m.s, m.vh*m.s);
   g.restore();
   g.fillStyle="rgba(4,6,12,0.45)"; g.fillRect(0,0,W,H);
 }
@@ -546,8 +609,25 @@ function drawString(s, dt, t){
     const px=x1+dx*f+nx*off, py=y1+dy*f+ny*off; i?g.lineTo(px,py):g.moveTo(px,py);
   }
   g.stroke(); g.restore();
-  // 端點
-  g.fillStyle=col; for (const [px,py] of [[x1,y1],[x2,y2]]){ g.beginPath(); g.arc(px,py,sel?5:3.5,0,Math.PI*2); g.fill(); }
+  // 端點（可捏住調整）：手靠近時亮起提示環，抓住時變大
+  g.fillStyle=col;
+  [[x1,y1,1],[x2,y2,2]].forEach(([px,py,end])=>{
+    const held = [...grabs.values()].some(gr=>gr.s===s&&gr.end===end);
+    let near = false;
+    for (const [k,h] of hands){ if (h.pinchPt && !grabs.has(k) && Math.hypot(h.pinchPt[0]-px,h.pinchPt[1]-py) < GRAB_PX()) near = true; }
+    g.beginPath(); g.arc(px,py,held?7:(sel?5:3.5),0,Math.PI*2); g.fill();
+    if (held || near){
+      g.save(); g.strokeStyle = held ? "#fff" : `hsla(${s.hue},90%,80%,0.8)`; g.lineWidth = held?2.5:1.5;
+      if (!held) g.setLineDash([4,4]);
+      g.beginPath(); g.arc(px,py,held?16:GRAB_PX()*0.6,0,Math.PI*2); g.stroke(); g.restore();
+    }
+  });
+  if ([...grabs.values()].some(gr=>gr.s===s)){
+    const mx=(x1+x2)/2, my=(y1+y2)/2, txt = S.settings.scale==="free" ? `${noteName(s.midi)} · ${s.freq.toFixed(0)} Hz` : noteName(s.midi);
+    g.font="700 18px -apple-system,system-ui,sans-serif"; const w=g.measureText(txt).width+18;
+    g.fillStyle="rgba(10,12,18,0.75)"; g.beginPath(); g.roundRect(mx-w/2,my-34,w,26,8); g.fill();
+    g.fillStyle="#fff"; g.fillText(txt, mx-w/2+9, my-15);
+  }
   // 音名
   g.fillStyle=`hsla(${s.hue},80%,85%,${0.55+s.amp*0.45})`; g.font="600 12px -apple-system,system-ui,sans-serif";
   const lx = x1 + nx*14, ly = y1 + ny*14; g.fillText(noteName(s.midi), lx-8, ly+4);
@@ -599,7 +679,7 @@ function placeDelBtn(){
   const s=S.selected, [x1,y1]=toPx(s.u1,s.v1),[x2,y2]=toPx(s.u2,s.v2);
   b.style.display="block";
   const bw=b.offsetWidth||120, bh=b.offsetHeight||34;
-  const x=Math.max(8,Math.min(W-bw-8,(x1+x2)/2-bw/2)), y=Math.max(8,Math.min(H-bh-90,(y1+y2)/2-bh-14));
+  const x=Math.max(8,Math.min(W-bw-8,(x1+x2)/2-bw/2)), y=Math.max(8,Math.min(H-bh-60,(y1+y2)/2-bh-14));
   b.style.left=x+"px"; b.style.top=y+"px";
 }
 
@@ -610,7 +690,7 @@ function frame(){
     try{ processHands(landmarker.detectForVideo(video, now), now); detN++; }catch(e){ console.warn(e); }
   } else if (landmarker && camReady){
     // 沒有新影格：仍檢查手是否消失
-    for (const [key,h] of hands){ if (now-h.lastSeen>LOST_GRACE_MS){ if (h.pinched) onPinchEnd(key); hands.delete(key); } }
+    for (const [key,h] of hands){ if (now-h.lastSeen>LOST_GRACE_MS){ if (h.pinched) onPinchEnd(key); grabs.has(key)&&endGrab(key); hands.delete(key); } }
   }
   drawVideo();
   for (const s of S.strings) drawString(s, dt, now);
@@ -627,29 +707,31 @@ function toast(msg){ const t=$("toast"); t.textContent=msg; t.style.opacity=1; c
 function updateHint(){
   const h=$("hint"); let msg="";
   const camMode = !!landmarker && camReady;
-  if (!S.strings.length) msg = camMode ? "雙手用拇指捏住食指，往兩邊拉開再放開，就會留下一條弦" :
-                                         (S.settings.touch==="draw" ? "在畫面上拖曳拉出一條弦" : "先切到「觸控：拉弦」拖曳拉出弦");
-  else if (S.strings.length<3) msg = camMode ? "張開手，用食指或中指劃過弦就會發聲；弦越短音越高" :
-                                               (S.settings.touch==="pluck" ? "手指快速劃過弦就會發聲" : "切到「觸控：撥弦」就能劃過弦彈奏");
+  if (!S.strings.length) msg = camMode ? "雙手用拇指捏住食指，往兩邊拉開再放開，就會留下一條弦" : "在空白處拖曳拉出一條弦";
+  else if (S.strings.length<3) msg = camMode ? "張開手用食指劃過弦就會發聲；捏住弦的端點可以再調整長短" :
+                                               "手指劃過弦就會發聲；按住弦的端點拖動可以調整長短";
   h.textContent=msg; h.style.opacity = msg?1:0;
 }
 function syncUI(){
   $("selScale").value=S.settings.scale; $("selRoot").value=S.settings.root; $("selTone").value=S.settings.tone;
   $("selRoot").disabled = S.settings.scale==="free" || S.settings.scale==="chromatic";
   $("btnSkel").classList.toggle("on",S.settings.skel);
-  $("btnMirror").classList.toggle("on",S.settings.mirror);
-  $("btnTouch").textContent = S.settings.touch==="pluck" ? "觸控：撥弦" : "觸控：拉弦";
-  $("btnTouch").classList.toggle("on", S.settings.touch==="draw");
   updateHint();
 }
 $("selScale").onchange=e=>{ S.settings.scale=e.target.value; retuneAll(); syncUI(); toast("已重新調音"); };
 $("selRoot").onchange=e=>{ S.settings.root=+e.target.value; retuneAll(); syncUI(); toast("已重新調音"); };
 $("selTone").onchange=e=>{ S.settings.tone=e.target.value; save(); };
 $("btnSkel").onclick=()=>{ S.settings.skel=!S.settings.skel; save(); syncUI(); };
-$("btnMirror").onclick=()=>{ S.settings.mirror=!S.settings.mirror; save(); syncUI(); };
-$("btnTouch").onclick=()=>{ S.settings.touch = S.settings.touch==="pluck"?"draw":"pluck"; save(); syncUI(); };
+// 全螢幕：不支援的裝置（如 iPhone Safari）自動隱藏按鈕
+const fsEl = document.documentElement;
+const fsReq = fsEl.requestFullscreen || fsEl.webkitRequestFullscreen;
+const fsOn = () => document.fullscreenElement || document.webkitFullscreenElement;
+if (!fsReq) $("btnFull").style.display="none";
+$("btnFull").onclick=()=>{ try{ fsOn() ? (document.exitFullscreen||document.webkitExitFullscreen).call(document) : fsReq.call(fsEl); }catch(e){} };
+for (const ev of ["fullscreenchange","webkitfullscreenchange"]) document.addEventListener(ev, ()=>{
+  $("btnFull").classList.toggle("on", !!fsOn()); $("btnFull").textContent = fsOn() ? "⛶ 離開全螢幕" : "⛶ 全螢幕"; });
 $("btnUndo").onclick=undoAction; $("btnRedo").onclick=redoAction;
-$("btnCam").onclick=async()=>{ S.facing = S.facing==="user"?"environment":"user"; S.settings.mirror = S.facing==="user"; syncUI();
+$("btnCam").onclick=async()=>{ S.facing = S.facing==="user"?"environment":"user"; syncUI();
   try{ await startCamera(); }catch(e){ toast("無法切換鏡頭"); } };
 $("delBtn").onclick=()=>{ if (S.selected){ doAction({type:"del", s:S.selected}); S.selected=null; toast("已刪除（可按 ↶ 復原）"); } };
 // 清空：確認關卡（Enter 送出 / Esc 取消）
@@ -676,7 +758,7 @@ function setStatus(msg, err=false){ const s=$("status"); s.textContent=msg; s.cl
 async function begin(useCam){
   initAudio();
   $("btnStart").disabled = $("btnTouchOnly").disabled = true;
-  if (!useCam){ S.settings.touch = S.strings.length ? "pluck" : "draw"; $("start").style.display="none"; syncUI(); return; }
+  if (!useCam){ $("start").style.display="none"; syncUI(); return; }
   try{
     if (!navigator.mediaDevices?.getUserMedia) throw new Error("這個瀏覽器不支援鏡頭存取（需要 HTTPS）");
     setStatus("開啟鏡頭中…");
@@ -720,7 +802,7 @@ setInterval(checkVersion, 5*60*1000);
 
 load(); afterChange(); syncUI();
 requestAnimationFrame(frame);
-window.__airstrings = { S, makeString, doAction, tryPluck, pitchForLength, processHands, hands, get draft(){return draft;} };  // 供測試
+window.__airstrings = { S, makeString, doAction, tryPluck, pitchForLength, processHands, hands, grabs, get draft(){return draft;} };  // 供測試
 </script>
 </body>
 </html>
