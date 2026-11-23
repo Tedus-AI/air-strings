@@ -150,7 +150,7 @@
   <div class="muted">開始遊戲時會暫時收起你目前的弦，結束後自動還原。</div>
   <div class="gm-item">
     <div class="txt"><b>⚽ 守護球</b>
-      <div class="muted">球會依物理落下，拉弦把它彈回去，別讓它掉到底。弦越緊（越短、音越高）越彈；打在弦的兩端比中間硬。被碰兩次的弦會斷，每斷 5 條球速加倍。</div></div>
+      <div class="muted">球會依物理落下，拉弦把它彈回去，別讓它掉到底。弦越緊（越短、音越高）越彈；打在弦的兩端比中間硬。被碰兩次的弦會斷；每斷 5 條速度 +0.2（×1.2、×1.4…），每加速 2 次多一顆球。</div></div>
     <div class="ctl"><button data-game="keeper" class="on">開始</button></div>
   </div>
   <div class="gm-item">
@@ -849,84 +849,107 @@ $("goExit").onclick=()=>{ $("gameOver").style.display="none"; stopGame(); };
      而本 App 的 L·f 為常數，所以 k ∝ f / (t(1-t))：音越高（越緊）越硬、越靠兩端越硬、正中最軟。
    - 接觸時只有沿弦法線的彈力 → 切向速度不變、法向速度反轉 → 入射角＝反射角。
    - 阻尼比依鬆緊：緊弦幾乎不吃能量（恢復係數約 0.9），鬆弦像彈翻床會吃掉較多（約 0.75）。
-   - 碰到一次弦會出現裂痕，第二次碰完就斷；每斷 5 條，整個時間尺度 ×2（球速倍增）。 */
-const KEEPER_SPEEDUP = 2;
+   - 球與球之間是等質量彈性碰撞（恢復係數 0.95）。
+   - 碰到一次弦會出現裂痕，第二次碰完就斷。
+   - 每斷 5 條弦升一級：速度 ×1.0 → 1.2 → 1.4 → 1.6 …（每級 +0.2）；每升 2 級多一顆球。 */
+const KEEPER_STEP = 0.2;            // 每級速度增加量
+const KEEPER_PER_LEVEL = 5;         // 斷幾條弦升一級
+const KEEPER_LEVELS_PER_BALL = 2;   // 每升幾級多一顆球
 const KEEPER_LIVES = 3;
+const BALL_HUES = [32, 190, 300, 110, 0, 260];
 const kOf = (s,t) => 1100*(s.freq/261.6) / (4*Math.max(0.05, t*(1-t)));
 const zetaOf = s => clamp(0.06*Math.sqrt(261.6/s.freq), 0.02, 0.14);
 GAMES.keeper = {
   id:"keeper", title:"守護球",
   start(){
-    Object.assign(this, { score:0, lives:KEEPER_LIVES, removed:0, level:0, ts:1, bounces:0, time:0, over:false, contacts:new Map(), flash:0 });
-    this.spawn(1.6);
+    Object.assign(this, { score:0, lives:KEEPER_LIVES, removed:0, level:0, ts:1, bounces:0, time:0, over:false, flash:0, balls:[], maxBalls:1 });
+    this.addBall(1.6);
   },
-  spawn(delay){
+  speedText(){ return "×"+this.ts.toFixed(1); },
+  newBallState(b, delay){
     const R = Math.max(10, DIAG*0.012);
-    this.ball = { x:W*(0.3+Math.random()*0.4), y:Math.max(R+70, playH()*0.12), vx:(Math.random()<.5?-1:1)*W*(0.04+Math.random()*0.08), vy:0, R, trail:[] };
-    this.wait = delay; this.contacts.clear();
+    Object.assign(b, { x:W*(0.2+Math.random()*0.6), y:Math.max(R+70, playH()*0.12), vx:(Math.random()<.5?-1:1)*W*(0.04+Math.random()*0.08), vy:0,
+      R, trail:[], wait:delay, contacts:new Map() });
+    return b;
   },
-  hint(){ return this.wait>0 || this.bounces<2 ? (camMode() ? "雙手捏住往兩邊拉出弦，接住球別讓它掉下去！" : "在球下方拖曳拉出弦，接住球別讓它掉下去！") : ""; },
+  addBall(delay){ this.balls.push(this.newBallState({ hue:BALL_HUES[this.balls.length % BALL_HUES.length] }, delay)); },
+  hint(){ return this.balls[0].wait>0 || this.bounces<2 ? (camMode() ? "雙手捏住往兩邊拉出弦，接住球別讓它掉下去！" : "在球下方拖曳拉出弦，接住球別讓它掉下去！") : ""; },
   hud(){
-    return `⚽ <b>${this.score}</b>　${"❤️".repeat(Math.max(0,this.lives))}${"🖤".repeat(Math.max(0,KEEPER_LIVES-this.lives))}　⚡<b>×${this.ts}</b>　斷弦 ${this.removed%5}/5`;
+    return `⚽ <b>${this.score}</b>　${"❤️".repeat(Math.max(0,this.lives))}${"🖤".repeat(Math.max(0,KEEPER_LIVES-this.lives))}　⚡<b>${this.speedText()}</b>　🔴×${this.balls.length}　斷弦 ${this.removed%KEEPER_PER_LEVEL}/${KEEPER_PER_LEVEL}`;
   },
   update(dt){
     if (this.over) return;
-    const b = this.ball;
-    if (this.wait>0){ this.wait-=dt; return; }
+    for (const b of this.balls) if (b.wait>0) b.wait -= dt;
+    const live = this.balls.filter(b=>b.wait<=0);
+    if (!live.length) return;
     this.time += dt;
     const g0 = 0.5*playH(), simDt = dt*this.ts;
     const segs = S.strings.map(s=>{ const [x1,y1]=toPx(s.u1,s.v1),[x2,y2]=toPx(s.u2,s.v2); const dx=x2-x1,dy=y2-y1,L=Math.hypot(dx,dy)||1;
       return { s, x1, y1, dx, dy, L, nx:-dy/L, ny:dx/L }; });
-    for (const s of S.strings) s.sag = null;
-    for (const id of this.contacts.keys()) if (!S.strings.some(s=>s.id===id)) this.contacts.delete(id);
+    for (const s of S.strings){ s.sag = null; s._pen = 0; }
+    for (const b of live) for (const id of b.contacts.keys()) if (!S.strings.some(s=>s.id===id)) b.contacts.delete(id);
     // 子步長：保證每步移動 < 0.4 R（不穿透）且彈簧積分穩定
-    const vmax = Math.hypot(b.vx,b.vy) + g0*simDt;
-    const n = Math.min(800, Math.max(Math.ceil(simDt*480), Math.ceil(vmax*simDt/(b.R*0.4))));
+    let n = Math.ceil(simDt*480);
+    for (const b of live) n = Math.max(n, Math.ceil((Math.hypot(b.vx,b.vy)+g0*simDt)*simDt/(b.R*0.4)));
+    n = Math.min(1000, n);
     const h = simDt/n, broken = new Set();
     for (let i=0;i<n;i++){
-      let ax=0, ay=g0;
-      for (const sg of segs){
-        if (broken.has(sg.s)) continue;
-        let c = this.contacts.get(sg.s.id); if (!c){ c={ in:false }; this.contacts.set(sg.s.id,c); }
-        const rx=b.x-sg.x1, ry=b.y-sg.y1, t=(rx*sg.dx+ry*sg.dy)/(sg.L*sg.L), dn=rx*sg.nx+ry*sg.ny;
-        if (!c.in && t>=0 && t<=1){
-          const crossed = c.lastDn!==undefined && c.lastDn!==0 && Math.sign(dn)!==Math.sign(c.lastDn);
-          if (Math.abs(dn) < b.R || crossed){
-            c.in = true; c.side = crossed ? Math.sign(c.lastDn) : (Math.sign(dn)||1); c.since = this.time;
-            this.onHit(sg, t, Math.abs(b.vx*sg.nx+b.vy*sg.ny));
+      for (const b of live){
+        let ax=0, ay=g0;
+        for (const sg of segs){
+          if (broken.has(sg.s)) continue;
+          let c = b.contacts.get(sg.s.id); if (!c){ c={ in:false }; b.contacts.set(sg.s.id,c); }
+          const rx=b.x-sg.x1, ry=b.y-sg.y1, t=(rx*sg.dx+ry*sg.dy)/(sg.L*sg.L), dn=rx*sg.nx+ry*sg.ny;
+          if (!c.in && t>=0 && t<=1){
+            const crossed = c.lastDn!==undefined && c.lastDn!==0 && Math.sign(dn)!==Math.sign(c.lastDn);
+            if (Math.abs(dn) < b.R || crossed){
+              c.in = true; c.side = crossed ? Math.sign(c.lastDn) : (Math.sign(dn)||1); c.since = this.time;
+              this.onHit(sg, t, Math.abs(b.vx*sg.nx+b.vy*sg.ny));
+            }
           }
-        }
-        if (c.in){
-          const pen = b.R - c.side*dn;
-          const stuck = this.time - c.since > 1.4;     // 球停在弦上太久 → 弦被壓斷，避免卡死
-          if (pen<=0 || t<-0.03 || t>1.03 || stuck){
-            c.in=false; if ((sg.s.ballHits||0)>=2 || stuck) broken.add(sg.s);
-          } else {
-            const tt=clamp(t,0,1), k=kOf(sg.s,tt), vn=b.vx*sg.nx+b.vy*sg.ny;
-            let fn = c.side*k*pen - 2*zetaOf(sg.s)*Math.sqrt(k)*vn;
-            if (fn*c.side < 0) fn = 0;               // 弦只會推、不會黏住球
-            ax += sg.nx*fn; ay += sg.ny*fn;
-            sg.s.sag = { t:tt, ox:-c.side*sg.nx*pen, oy:-c.side*sg.ny*pen };
+          if (c.in){
+            const pen = b.R - c.side*dn;
+            const stuck = this.time - c.since > 1.4;     // 球停在弦上太久 → 弦被壓斷，避免卡死
+            if (pen<=0 || t<-0.03 || t>1.03 || stuck){
+              c.in=false; if ((sg.s.ballHits||0)>=2 || stuck) broken.add(sg.s);
+            } else {
+              const tt=clamp(t,0,1), k=kOf(sg.s,tt), vn=b.vx*sg.nx+b.vy*sg.ny;
+              let fn = c.side*k*pen - 2*zetaOf(sg.s)*Math.sqrt(k)*vn;
+              if (fn*c.side < 0) fn = 0;               // 弦只會推、不會黏住球
+              ax += sg.nx*fn; ay += sg.ny*fn;
+              if (pen > sg.s._pen){ sg.s._pen = pen; sg.s.sag = { t:tt, ox:-c.side*sg.nx*pen, oy:-c.side*sg.ny*pen }; }
+            }
           }
+          c.lastDn = dn;
         }
-        c.lastDn = dn;
+        b.vx += ax*h; b.vy += ay*h; b.x += b.vx*h; b.y += b.vy*h;
+        if (b.x < b.R){ b.x=b.R; b.vx=Math.abs(b.vx)*0.9; }
+        if (b.x > W-b.R){ b.x=W-b.R; b.vx=-Math.abs(b.vx)*0.9; }
+        if (b.y < b.R){ b.y=b.R; b.vy=Math.abs(b.vy)*0.9; }
       }
-      b.vx += ax*h; b.vy += ay*h; b.x += b.vx*h; b.y += b.vy*h;
-      if (b.x < b.R){ b.x=b.R; b.vx=Math.abs(b.vx)*0.9; }
-      if (b.x > W-b.R){ b.x=W-b.R; b.vx=-Math.abs(b.vx)*0.9; }
-      if (b.y < b.R){ b.y=b.R; b.vy=Math.abs(b.vy)*0.9; }
+      // 球與球：等質量彈性碰撞
+      for (let p=0;p<live.length;p++) for (let q=p+1;q<live.length;q++){
+        const a=live[p], c=live[q], dx=c.x-a.x, dy=c.y-a.y, d=Math.hypot(dx,dy), rr=a.R+c.R;
+        if (d>=rr || d<1e-6) continue;
+        const nx=dx/d, ny=dy/d, vrel=(c.vx-a.vx)*nx+(c.vy-a.vy)*ny, ov=(rr-d)/2;
+        a.x-=nx*ov; a.y-=ny*ov; c.x+=nx*ov; c.y+=ny*ov;
+        if (vrel<0){ const j=-(1+0.95)/2*vrel; a.vx-=j*nx; a.vy-=j*ny; c.vx+=j*nx; c.vy+=j*ny; }
+      }
     }
     for (const s of broken) this.breakString(s);
-    b.trail.push([b.x,b.y]); if (b.trail.length>14) b.trail.shift();
-    if (b.y - b.R > playH()){
-      this.lives--; this.flash = 1;
-      burst(clamp(b.x,0,W), playH()-4, 0, 40, 1.4);
-      playPluck({ freq:65.41, u1:b.x/W, u2:b.x/W }, 1, 0.5);
-      if (this.lives<=0){
-        this.over=true;
-        gameOver("球掉下去了", this.score, `撐了 ${this.time.toFixed(1)} 秒・反彈 ${this.bounces} 次・斷弦 ${this.removed} 條・最高速度 ×${this.ts}`);
-      } else { toast(`漏接！剩 ${this.lives} 條命`); this.spawn(1.2); }
+    for (const b of live){
+      b.trail.push([b.x,b.y]); if (b.trail.length>14) b.trail.shift();
+      if (b.y - b.R > playH() && !this.over) this.loseBall(b);
     }
+  },
+  loseBall(b){
+    this.lives--; this.flash = 1;
+    burst(clamp(b.x,0,W), playH()-4, b.hue, 40, 1.4);
+    playPluck({ freq:65.41, u1:b.x/W, u2:b.x/W }, 1, 0.5);
+    if (this.lives<=0){
+      this.over=true;
+      gameOver("球掉下去了", this.score, `撐了 ${this.time.toFixed(1)} 秒・反彈 ${this.bounces} 次・斷弦 ${this.removed} 條<br>最高速度 ${this.speedText()}・最多 ${this.maxBalls} 顆球`);
+    } else { toast(`漏接！剩 ${this.lives} 條命`); this.newBallState(b, 1.2); }
   },
   onHit(sg, t, vn){
     const s = sg.s; s.ballHits = (s.ballHits||0)+1; this.bounces++;
@@ -940,28 +963,45 @@ GAMES.keeper = {
     const i = S.strings.indexOf(s); if (i<0) return;
     const [x1,y1]=toPx(s.u1,s.v1),[x2,y2]=toPx(s.u2,s.v2);
     for (let k=0;k<=8;k++) burst(x1+(x2-x1)*k/8, y1+(y2-y1)*k/8, s.hue, 5, 0.6);
-    S.strings.splice(i,1); this.contacts.delete(s.id);
+    S.strings.splice(i,1);
+    for (const b of this.balls) b.contacts.delete(s.id);
     for (const [k,gr] of grabs) if (gr.s===s) grabs.delete(k);
     afterChange();
     this.removed++; this.score += 50*(this.level+1);
-    if (this.removed % 5 === 0){ this.level++; this.ts *= KEEPER_SPEEDUP; toast(`⚡ 球速 ×${this.ts}！`); }
+    if (this.removed % KEEPER_PER_LEVEL === 0) this.levelUp();
+  },
+  levelUp(){
+    this.level++;
+    this.ts = Math.round((1 + KEEPER_STEP*this.level)*10)/10;
+    const want = 1 + Math.floor(this.level / KEEPER_LEVELS_PER_BALL);
+    if (this.balls.length < want){
+      this.addBall(1.2); this.maxBalls = Math.max(this.maxBalls, this.balls.length);
+      toast(`⚡ 速度 ${this.speedText()}　＋1 顆球！`);
+    } else toast(`⚡ 速度 ${this.speedText()}`);
   },
   draw(){
-    const b = this.ball;
     if (this.flash>0){ g.fillStyle=`rgba(255,60,60,${this.flash*0.25})`; g.fillRect(0,0,W,H); this.flash=Math.max(0,this.flash-0.04); }
     // 底線（掉到這裡就漏接）
     g.save(); g.strokeStyle="rgba(255,90,90,0.55)"; g.setLineDash([10,8]); g.lineWidth=2;
     g.beginPath(); g.moveTo(0,playH()-1); g.lineTo(W,playH()-1); g.stroke(); g.restore();
-    if (this.wait>0 && !this.over){
+    if (this.balls.length===1 && this.balls[0].wait>0 && this.time===0 && !this.over){
       g.font="800 40px -apple-system,system-ui,sans-serif"; g.textAlign="center"; g.fillStyle="rgba(255,231,194,0.9)";
-      g.fillText(this.wait>0.5 ? "準備…" : "開始！", W/2, playH()*0.42); g.textAlign="start";
+      g.fillText(this.balls[0].wait>0.5 ? "準備…" : "開始！", W/2, playH()*0.42); g.textAlign="start";
     }
-    // 球與拖尾
+    // 球與拖尾；還在等待出場的球閃爍並畫倒數環
     g.save(); g.globalCompositeOperation="lighter";
-    b.trail.forEach(([x,y],i)=>{ g.fillStyle=`rgba(255,200,120,${i/b.trail.length*0.25})`; g.beginPath(); g.arc(x,y,b.R*(0.4+0.6*i/b.trail.length),0,Math.PI*2); g.fill(); });
-    const gr = g.createRadialGradient(b.x-b.R*0.35,b.y-b.R*0.35,1,b.x,b.y,b.R);
-    gr.addColorStop(0,"#fff8e6"); gr.addColorStop(0.5,"#ffc66b"); gr.addColorStop(1,"#ff7a3a");
-    g.shadowColor="#ffb050"; g.shadowBlur=18; g.fillStyle=gr; g.beginPath(); g.arc(b.x,b.y,b.R,0,Math.PI*2); g.fill();
+    const now = performance.now();
+    for (const b of this.balls){
+      const waiting = b.wait>0;
+      b.trail.forEach(([x,y],i)=>{ g.fillStyle=`hsla(${b.hue},100%,70%,${i/b.trail.length*0.25})`; g.beginPath(); g.arc(x,y,b.R*(0.4+0.6*i/b.trail.length),0,Math.PI*2); g.fill(); });
+      g.globalAlpha = waiting ? 0.45+0.35*Math.sin(now/90) : 1;
+      const gr = g.createRadialGradient(b.x-b.R*0.35,b.y-b.R*0.35,1,b.x,b.y,b.R);
+      gr.addColorStop(0,"#fffaf0"); gr.addColorStop(0.5,`hsl(${b.hue},95%,68%)`); gr.addColorStop(1,`hsl(${b.hue-14},90%,52%)`);
+      g.shadowColor=`hsl(${b.hue},100%,65%)`; g.shadowBlur=18; g.fillStyle=gr; g.beginPath(); g.arc(b.x,b.y,b.R,0,Math.PI*2); g.fill();
+      g.globalAlpha = 1; g.shadowBlur = 0;
+      if (waiting){ g.strokeStyle=`hsla(${b.hue},100%,75%,0.9)`; g.lineWidth=2.5;
+        g.beginPath(); g.arc(b.x,b.y,b.R+7,-Math.PI/2,-Math.PI/2+Math.PI*2*clamp(b.wait/1.6,0,1)); g.stroke(); }
+    }
     g.restore();
   },
 };
