@@ -169,6 +169,11 @@
     <div class="ctl"><button data-game="versus" class="on">開始</button></div>
   </div>
   <div class="gm-item">
+    <div class="txt"><b>🔨 音樂打地鼠</b>
+      <div class="muted">握拳＝拿起槌子，舉起往下敲。每個洞是一個音，敲地鼠就是在演奏；金色快閃 +50、戴鋼盔要敲兩下、別敲兔子。選歌曲則地鼠依旋律出現，敲完就彈完一首歌。</div></div>
+    <div class="ctl"><select id="gmMole" aria-label="打地鼠模式"><option value="free">自由演奏 60 秒</option></select><button data-game="mole" class="on">開始</button></div>
+  </div>
+  <div class="gm-item">
     <div class="txt"><b>🎵 跟彈歌曲</b>
       <div class="muted">會自動排好一把豎琴，照著亮起的弦依序撥，越快越準分數越高。</div></div>
     <div class="ctl"><select id="gmSong" aria-label="選歌"></select><button data-game="follow" class="on">開始</button></div>
@@ -665,12 +670,13 @@ function updateHand(key, h, pts, now){
   h.pts = pts; h.lastSeen = now; h.scale = scale;
   h.pinchR = dist2(pts[4],pts[8])/scale;
   h.pinchPt = [(pts[4][0]+pts[8][0])/2, (pts[4][1]+pts[8][1])/2];
-  // 握拳 → 制音：四根手指「全部」收回才算（看最遠的一根），且拇指沒碰到食指尖
-  // → 其他手指彎著、只用拇指食指捏的「OK 手勢」不會被誤判成握拳
+  // 握拳：四根手指「全部」收回才算（看最遠的一根）；而且拇指沒碰食指尖，或食指尖已折回到食指根部。
+  // → 捏合時食指是伸出去的，不會被誤判成握拳；真的握拳時拇指靠在食指旁也照樣算拳頭
   const curl = Math.max(...[8,12,16,20].map(i=>dist2(pts[i],pts[0])))/scale;
+  const idxFold = dist2(pts[8],pts[5])/scale;
   const wasFist = h.fist;
-  h.fist = (wasFist ? curl < FIST_OFF : curl < FIST_ON) && (h.pinched ? false : h.pinchR > PINCH_ON);
-  if (h.fist && !wasFist) muteAll();
+  h.fist = (wasFist ? curl < FIST_OFF : curl < FIST_ON) && (h.pinchR > PINCH_ON || idxFold < 0.65);
+  if (h.fist && !wasFist && !Game.active?.noFistMute) muteAll();   // 打地鼠時握拳是拿槌子，不制音
   // 隔空操作介面：捏合點落在按鈕／選單上時，捏一下＝點擊，停住不動＝自動點擊
   const ui = uiTargetAt(h.pinchPt[0], h.pinchPt[1]);
   // 捏合（握拳時不算捏）；放開需連續數格才成立，避免快速拉弦時中斷
@@ -1285,6 +1291,286 @@ const SONGS = {
   bday:{ name:"生日快樂", notes:[67,67,69,67,72,71, 67,67,69,67,74,72, 67,67,79,76,72,71,69, 77,77,76,72,74,72] },
 };
 for (const [k,v] of Object.entries(SONGS)){ const o=document.createElement("option"); o.value=k; o.textContent=v.name; $("gmSong").appendChild(o); }
+for (const [k,v] of Object.entries(SONGS)){ const o=document.createElement("option"); o.value=k; o.textContent="🎵 "+v.name; $("gmMole").appendChild(o); }
+/* ---------- 遊戲 3：音樂打地鼠 ----------
+   操作：握拳＝拿起槌子（拳頭就是槌頭），往下劈再急停＝敲一下；觸控直接點地鼠。
+   判定（為了在 30fps、有延遲的手部追蹤下順手）：
+   - 位置用掌心（手腕＋四指根部平均）並平滑，比指尖穩定。
+   - 狀態機：待命 →（握拳且往下速度 > 門檻）→ 揮擊中 →（速度掉到峰值 35% 以下）→ 命中 → 冷卻 0.18 秒。
+     慢慢放下手、往上移動都不會觸發。門檻會依玩家揮擊力道自動調整（峰值平均的一半）。
+   - 瞄準輔助：命中點 1.35 倍洞口半徑內的地鼠都算；地鼠縮回後 0.12 秒內仍可打（補償延遲）。
+   音樂：每個洞固定一個音，打中就用目前音色彈出那個音；歌曲模式下地鼠依旋律順序出現。 */
+const MOLE_TIME = 60;
+const MOLE_TYPES = {
+  normal:{ pts:10 }, gold:{ pts:50 }, helmet:{ pts:20 }, rabbit:{ pts:-20 },
+};
+GAMES.mole = {
+  id:"mole", title:"音樂打地鼠", noFistMute:true,
+  start(mode){
+    this.mode = SONGS[mode] ? mode : "free";
+    this.song = SONGS[mode] || null;
+    Object.assign(this, { score:0, combo:0, maxCombo:0, hits:0, whiffs:0, missed:0, rabbits:0, time:0, phase:"practice", over:false,
+      spawnCD:0.6, fx:[], hs:new Map(), ton:1.3, peaks:[], idx:0, countdown:0, layoutKey:"", holes:null });
+    this.layout();
+    // 練習：中間那個洞出現一隻不會跑的地鼠
+    const mid = this.holes[Math.floor(this.holes.length/2)];
+    this.pop(mid, "normal", 99, true);
+  },
+  holeNotes(n){
+    if (this.song){ return [...new Set(this.song.notes)].sort((a,b)=>a-b); }
+    const root = S.settings.root, out=[];
+    for (let k=60+root; out.length<n; k++) if (SCALES.penta.includes(((k-root)%12+12)%12)) out.push(k);
+    return out;
+  },
+  layout(){
+    const land = W >= playH()*1.1;
+    let n = this.song ? new Set(this.song.notes).size : (land ? 9 : 8);
+    const cols = land ? Math.min(4, Math.max(3, Math.ceil(n/3))) : 2, rows = Math.ceil(n/cols);
+    const ph = playH(), y0 = ph*0.30, y1 = ph*0.80;
+    const r = Math.min(W/(cols*2.7), (y1-y0)/(rows*2.0+0.6), DIAG*0.07);
+    const notes = this.holeNotes(n), holes = [];
+    for (let i=0;i<n;i++){
+      const row = Math.floor(i/cols), col = i%cols;              // row 0 = 最前排（最下面、最低音）
+      const inRow = Math.min(cols, n-row*cols);
+      const sc = rows>1 ? 1 - 0.16*row/(rows-1) : 1;
+      const y = rows>1 ? y1 - (y1-y0)*row/(rows-1) : (y0+y1)/2;
+      const span = W*(0.72 - 0.08*row/(Math.max(1,rows-1)));
+      const x = W/2 + (inRow>1 ? (col/(inRow-1)-0.5)*span : 0);
+      const old = this.holes?.[i];
+      holes.push({ x, y, r:r*sc, note:notes[i], mole: old?.mole || null });
+    }
+    this.holes = holes; this.layoutKey = `${W}x${H}`;
+  },
+  hint(){
+    if (this.phase==="practice") return camMode() ? "練習：握拳拿起槌子，舉起來往下敲那隻地鼠！" : "練習：點一下那隻地鼠！";
+    if (this.time < 5 && this.phase==="play") return this.song ? "照順序敲地鼠，就會彈出整首歌 🎵" : "敲地鼠就是在演奏！小心別敲到兔子 🐰";
+    return "";
+  },
+  mult(){ return this.combo>=10 ? 3 : this.combo>=6 ? 2 : this.combo>=3 ? 1.5 : 1; },
+  hud(){
+    const head = this.song ? `🎵 ${this.song.name} <b>${this.idx}</b>/${this.song.notes.length}` :
+      this.phase==="play" ? `⏱ <b>${Math.max(0,Math.ceil(MOLE_TIME-this.time))}</b>${this.time>MOLE_TIME-15?" 🔥狂熱":""}` : "🔨 練習";
+    return `${head}　🔨 <b>${this.score}</b>　連擊 ${this.combo}${this.mult()>1?`（×${this.mult()}）`:""}`;
+  },
+  // 觸控／滑鼠點擊＝敲；手的「捏」在這個遊戲不做任何事（也不會拉弦）
+  capturePinch(key, p){ if (key[0]==="p") this.impact(p, performance.now(), key); return true; },
+  pop(hole, type, stay, practice=false){
+    hole.mole = { type, t0:this.time, stay, state:"up", hp: type==="helmet" ? 2 : 1, practice, rise:0, hitAt:0, goneAt:0 };
+  },
+  update(dt, now){
+    if (this.over) return;
+    if (this.layoutKey !== `${W}x${H}`) this.layout();
+    // ---- 手：握拳槌子的狀態機 ----
+    for (const [key,h] of hands){
+      let st = this.hs.get(key);
+      const pts=h.pts, cx=(pts[0][0]+pts[5][0]+pts[9][0]+pts[13][0]+pts[17][0])/5, cy=(pts[0][1]+pts[5][1]+pts[9][1]+pts[13][1]+pts[17][1])/5;
+      if (!st){ st={ x:cx, y:cy, vy:0, t:h.lastSeen, state:"armed", peak:0, cool:0, hitT:-1 }; this.hs.set(key,st); }
+      if (h.lastSeen !== st.t){            // 新的一格追蹤資料
+        const dtt = Math.max(0.008, (h.lastSeen - st.t)/1000);
+        const nx = st.x*0.35 + cx*0.65, ny = st.y*0.35 + cy*0.65;
+        const v = (ny - st.y)/dtt/H;        // 往下為正，單位：螢幕高／秒
+        st.vy = st.vy*0.4 + v*0.6; st.x = nx; st.y = ny; st.t = h.lastSeen;
+        if (st.state==="armed" && h.fist && st.vy > this.ton){ st.state="swing"; st.peak=st.vy; st.swingT=now; }
+        else if (st.state==="swing"){
+          st.peak = Math.max(st.peak, st.vy);
+          if (!h.fist && st.vy < this.ton*0.5) st.state="armed";
+          else if (st.vy < st.peak*0.35 || now-st.swingT > 450){
+            st.state="cool"; st.cool=0.18; st.hitT=now;
+            this.peaks.push(st.peak); if (this.peaks.length>6) this.peaks.shift();
+            this.ton = clamp(0.5*this.peaks.reduce((a,b)=>a+b,0)/this.peaks.length, 0.8, 2.0);   // 自動校正門檻
+            this.impact([st.x, st.y], now, key);
+          }
+        }
+      }
+      st.fist = h.fist;
+      if (st.state==="cool"){ st.cool -= dt; if (st.cool<=0 && st.vy < this.ton*0.5) st.state="armed"; }
+    }
+    for (const key of this.hs.keys()) if (!hands.has(key)) this.hs.delete(key);
+    // ---- 地鼠動畫與逾時 ----
+    for (const ho of this.holes){
+      const m = ho.mole; if (!m) continue;
+      if (m.state==="up"){ m.rise = Math.min(1, m.rise + dt/0.12); if (this.time - m.t0 > m.stay) m.state="hiding"; }
+      else if (m.state==="hiding"){ m.rise -= dt/0.14; if (m.rise<=0){ m.state="gone"; m.goneAt=this.time;
+          if (m.type!=="rabbit"){ this.missed++; this.combo=0; } } }
+      else if (m.state==="hit"){ m.rise -= dt/0.3; if (m.rise<=0){ m.state="gone"; m.goneAt=this.time-1; } }
+      else if (m.state==="gone" && this.time - m.goneAt > 0.12) ho.mole = null;
+    }
+    for (let i=this.fx.length-1;i>=0;i--){ const f=this.fx[i]; f.life-=dt*1.4; f.y-=40*dt; if (f.life<=0) this.fx.splice(i,1); }
+    // ---- 流程 ----
+    if (this.phase==="practice") return;
+    if (this.phase==="count"){ this.countdown -= dt; if (this.countdown<=0){ this.phase="play"; } return; }
+    this.time += dt;
+    if (this.song) this.updateSong(); else this.updateFree(dt);
+  },
+  updateFree(dt){
+    if (this.time >= MOLE_TIME){
+      this.over = true;
+      const tot = this.hits+this.missed+this.whiffs, acc = tot ? Math.round(this.hits/tot*100) : 0;
+      gameOver("⏱ 時間到！", this.score, `命中 ${this.hits}・漏掉 ${this.missed}・打空 ${this.whiffs}・誤敲兔子 ${this.rabbits}<br>命中率 ${acc}%・最高連擊 ${this.maxCombo}`);
+      return;
+    }
+    const t = this.time, frenzy = t > MOLE_TIME-15;
+    const maxUp = frenzy ? 3 : t > 20 ? 2 : 1, stay = frenzy ? 0.65 : t > 20 ? 1.0 : 1.2;
+    const up = this.holes.filter(h=>h.mole && h.mole.state!=="gone").length;
+    this.spawnCD -= dt;
+    if (up < maxUp && this.spawnCD <= 0){
+      const free = this.holes.filter(h=>!h.mole); if (!free.length) return;
+      const ho = free[Math.floor(Math.random()*free.length)], r = Math.random();
+      const type = t>8 && r<0.12 ? "rabbit" : r<0.22 ? "gold" : r<0.37 ? "helmet" : "normal";
+      this.pop(ho, type, type==="gold" ? stay*0.5 : type==="helmet" ? stay*1.4 : stay);
+      this.spawnCD = (frenzy ? 0.15 : 0.3) + Math.random()*(frenzy ? 0.3 : 0.5);
+    }
+  },
+  updateSong(){
+    const notes = this.song.notes;
+    if (this.idx >= notes.length){
+      if (!this.holes.some(h=>h.mole && h.mole.state!=="gone")){
+        this.over = true;
+        const acc = Math.round(this.hits/Math.max(1,notes.length)*100);
+        gameOver(`🎉 ${this.song.name} 演奏完成！`, this.score, `命中 ${this.hits}/${notes.length}（${acc}%）・最高連擊 ${this.maxCombo}・用時 ${this.time.toFixed(1)} 秒`);
+      }
+      return;
+    }
+    // 一次只出一隻：上一隻結束後，下一個音的地鼠就從對應的洞冒出來
+    if (this.holes.some(h=>h.mole && h.mole.state!=="gone")) return;
+    const ho = this.holes.find(h=>h.note===notes[this.idx]); this.idx++;
+    if (ho) this.pop(ho, "normal", 2.2);
+  },
+  impact(p, now, key){
+    // 找命中的地鼠（瞄準輔助：1.35 倍洞口半徑；剛縮回 0.12 秒內也算）
+    let best=null, bd=1e9;
+    for (const ho of this.holes){
+      const m = ho.mole; if (!m || m.state==="hit") continue;
+      if (m.state==="gone" && this.time - m.goneAt > 0.12) continue;
+      const d = Math.hypot(p[0]-ho.x, p[1]-(ho.y-ho.r*0.5));
+      if (d < ho.r*1.35 && d < bd){ bd=d; best=ho; }
+    }
+    burst(p[0], p[1], 45, 8, 0.5);
+    if (!best){
+      const nearHole = this.holes.some(ho=>Math.hypot(p[0]-ho.x, p[1]-ho.y) < ho.r*1.3);
+      if (nearHole && this.phase==="play"){ this.whiffs++; this.combo=0; this.fx.push({x:p[0],y:p[1]-20,text:"空",color:"#9aa3b5",life:1}); }
+      return;
+    }
+    const m = best.mole, voice = { freq:midiToFreq(best.note), u1:best.x/W, u2:best.x/W };
+    if (m.type==="rabbit"){
+      this.score = Math.max(0, this.score + MOLE_TYPES.rabbit.pts); this.combo=0; this.rabbits++;
+      m.state="hit"; m.hitAt=this.time;
+      playPluck({ freq:midiToFreq(best.note-13), u1:voice.u1, u2:voice.u2 }, 0.9, 0.5);
+      playPluck({ freq:midiToFreq(best.note-12), u1:voice.u1, u2:voice.u2 }, 0.9, 0.5);   // 不和諧的低音
+      this.fx.push({ x:best.x, y:best.y-best.r*1.6, text:"-20 🐰", color:"#ff7a7a", life:1 });
+      burst(best.x, best.y-best.r*0.6, 0, 20, 0.9);
+      return;
+    }
+    if (m.type==="helmet" && m.hp>1){        // 第一下：鋼盔飛掉
+      m.hp--; m.stay += 0.6;
+      playPluck(voice, 0.5, 0.05);
+      this.fx.push({ x:best.x, y:best.y-best.r*1.6, text:"鏘！", color:"#cfd6e3", life:1 });
+      burst(best.x, best.y-best.r*1.2, 210, 14, 0.9);
+      return;
+    }
+    m.state = "hit"; m.hitAt = this.time;
+    if (m.practice){
+      playPluck(voice, 0.9, 0.3); this.phase = "count"; this.countdown = 1.6;
+      this.fx.push({ x:best.x, y:best.y-best.r*1.6, text:"很好！準備開始", color:"#ffe08a", life:1.4 });
+      burst(best.x, best.y-best.r*0.6, 45, 26, 1);
+      return;
+    }
+    this.combo++; this.maxCombo = Math.max(this.maxCombo, this.combo); this.hits++;
+    const frenzy = !this.song && this.time > MOLE_TIME-15;
+    const gain = Math.round(MOLE_TYPES[m.type].pts * this.mult() * (frenzy?2:1));
+    this.score += gain;
+    playPluck(voice, 0.9, 0.3);
+    if (this.combo >= 6) playPluck({ freq:midiToFreq(best.note+7), u1:voice.u1, u2:voice.u2 }, 0.35, 0.3);   // 連擊高時加五度和聲
+    this.fx.push({ x:best.x, y:best.y-best.r*1.6, text:`+${gain}${m.type==="gold"?" ✨":""}`, color: m.type==="gold" ? "#ffd84a" : "#ffffff", life:1 });
+    burst(best.x, best.y-best.r*0.6, m.type==="gold" ? 50 : 35, m.type==="gold" ? 30 : 18, 1);
+  },
+  draw(now){
+    const ph = playH();
+    // 草地
+    const top = Math.min(...this.holes.map(h=>h.y-h.r*2.2)), bot = Math.max(...this.holes.map(h=>h.y+h.r*1.2));
+    const gr = g.createLinearGradient(0, top, 0, bot);
+    gr.addColorStop(0, "rgba(60,140,70,0.10)"); gr.addColorStop(1, "rgba(60,150,70,0.28)");
+    g.fillStyle = gr; g.beginPath(); g.roundRect(W*0.04, top, W*0.92, bot-top, 24); g.fill();
+    for (const ho of this.holes) this.drawHole(ho);
+    // 飄字
+    g.textAlign="center";
+    for (const f of this.fx){ g.globalAlpha=Math.min(1,f.life); g.fillStyle=f.color; g.font="800 22px -apple-system,system-ui,sans-serif"; g.fillText(f.text, f.x, f.y); }
+    g.globalAlpha=1;
+    if (this.phase==="count"){ g.font="800 44px -apple-system,system-ui,sans-serif"; g.fillStyle="rgba(255,231,194,0.95)"; g.fillText(this.countdown>0.8?"準備…":"開始！", W/2, ph*0.18); }
+    g.textAlign="start";
+    // 槌子：拳頭就是槌頭
+    for (const [key,h] of hands){
+      const st = this.hs.get(key); if (!st) continue;
+      this.drawHammer(st, h, now);
+    }
+  },
+  drawHole(ho){
+    const { x, y, r } = ho, m = ho.mole;
+    // 洞（後半圈）
+    g.fillStyle="#1b120c"; g.beginPath(); g.ellipse(x, y, r, r*0.36, 0, 0, Math.PI*2); g.fill();
+    if (m && m.rise>0){
+      g.save(); g.beginPath(); g.rect(x-r*1.6, y-r*3.2, r*3.2, r*3.2); g.clip();
+      this.drawMole(x, y, r*0.72, m);
+      g.restore();
+    }
+    // 洞口前緣（蓋住地鼠下半身）
+    g.strokeStyle="#6b4a2b"; g.lineWidth=Math.max(3, r*0.14);
+    g.beginPath(); g.ellipse(x, y, r, r*0.36, 0, 0, Math.PI); g.stroke();
+    g.fillStyle="rgba(107,74,43,0.85)"; g.beginPath(); g.ellipse(x, y+r*0.06, r*1.02, r*0.36, 0, 0.05, Math.PI-0.05); g.lineTo(x-r*1.02, y+r*0.06); g.fill();
+    // 這個洞的音
+    g.fillStyle="rgba(255,240,200,0.75)"; g.font=`700 ${Math.max(11, r*0.22)}px -apple-system,system-ui,sans-serif`; g.textAlign="center";
+    g.fillText("♪ "+noteName(ho.note), x, y+r*0.36+Math.max(14, r*0.3)); g.textAlign="start";
+  },
+  drawMole(x, baseY, R, m){
+    const squash = m.state==="hit" ? 0.7 : 1;
+    const by = baseY + R*1.2 - m.rise*R*2.0;
+    const col = { normal:"#8a5a3b", gold:"#f2c23a", helmet:"#8a5a3b", rabbit:"#f4f1ec" }[m.type];
+    if (m.type==="rabbit"){   // 兔耳
+      for (const sx of [-1,1]){ g.fillStyle=col; g.beginPath(); g.ellipse(x+sx*R*0.38, by-R*1.25, R*0.22, R*0.62, sx*0.15, 0, Math.PI*2); g.fill();
+        g.fillStyle="#f6b8c8"; g.beginPath(); g.ellipse(x+sx*R*0.38, by-R*1.22, R*0.1, R*0.45, sx*0.15, 0, Math.PI*2); g.fill(); }
+    }
+    g.save();
+    if (m.type==="gold"){ g.shadowColor="#ffd84a"; g.shadowBlur=22; }
+    g.fillStyle=col; g.beginPath(); g.ellipse(x, by, R, R*1.15*squash, 0, 0, Math.PI*2); g.fill(); g.restore();
+    // 肚子
+    g.fillStyle = m.type==="rabbit" ? "#ffffff" : "rgba(255,230,200,0.35)";
+    g.beginPath(); g.ellipse(x, by+R*0.45, R*0.6, R*0.55*squash, 0, 0, Math.PI*2); g.fill();
+    // 臉
+    const ey = by - R*0.3*squash;
+    g.fillStyle="#1a1a1a";
+    if (m.state==="hit"){ g.strokeStyle="#1a1a1a"; g.lineWidth=Math.max(2,R*0.07);
+      for (const sx of [-1,1]){ const ex=x+sx*R*0.35; g.beginPath(); g.moveTo(ex-R*0.1,ey-R*0.1); g.lineTo(ex+R*0.1,ey+R*0.1); g.moveTo(ex+R*0.1,ey-R*0.1); g.lineTo(ex-R*0.1,ey+R*0.1); g.stroke(); } }
+    else for (const sx of [-1,1]){ g.beginPath(); g.arc(x+sx*R*0.35, ey, R*0.1, 0, Math.PI*2); g.fill(); }
+    g.fillStyle = m.type==="rabbit" ? "#f39ab0" : "#e58a9a"; g.beginPath(); g.ellipse(x, ey+R*0.25, R*0.14, R*0.1, 0, 0, Math.PI*2); g.fill();
+    if (m.type!=="rabbit"){ g.fillStyle="#fff"; g.fillRect(x-R*0.1, ey+R*0.34, R*0.09, R*0.14); g.fillRect(x+R*0.01, ey+R*0.34, R*0.09, R*0.14); }
+    if (m.type==="helmet" && m.hp>1){   // 鋼盔
+      g.fillStyle="#9aa6b6"; g.beginPath(); g.ellipse(x, by-R*0.55*squash, R*1.08, R*0.62, 0, Math.PI, Math.PI*2); g.fill();
+      g.fillStyle="#c9d2de"; g.fillRect(x-R*1.1, by-R*0.6*squash, R*2.2, R*0.14);
+    }
+    if (m.type==="gold"){ g.fillStyle="#fff7c0"; g.font=`${R*0.45}px sans-serif`; g.textAlign="center"; g.fillText("✨", x+R*0.9, by-R*0.9); g.textAlign="start"; }
+  },
+  drawHammer(st, h, now){
+    const r = Math.max(18, Math.min(...this.holes.map(o=>o.r))*0.42);
+    const swinging = st.state==="swing", justHit = now - st.hitT < 120;
+    const ang = justHit ? 0.55 : swinging ? 0.35 : st.fist ? -0.35 : -0.2;
+    g.save(); g.translate(st.x, st.y); g.rotate(ang); g.globalAlpha = st.fist ? 1 : 0.4;
+    // 握把（往右下延伸）
+    g.fillStyle="#b07a45"; g.beginPath(); g.roundRect(-r*0.22, 0, r*0.44, r*2.6, r*0.2); g.fill();
+    // 槌頭
+    const hg = g.createLinearGradient(0, -r*0.7, 0, r*0.7);
+    hg.addColorStop(0, "#ff8a7a"); hg.addColorStop(1, "#c8322a");
+    g.fillStyle=hg; g.beginPath(); g.roundRect(-r*1.15, -r*0.62, r*2.3, r*1.24, r*0.3); g.fill();
+    g.fillStyle="#f3d27a"; g.fillRect(-r*1.15, -r*0.62, r*0.32, r*1.24); g.fillRect(r*0.83, -r*0.62, r*0.32, r*1.24);
+    g.restore();
+    if (justHit){ g.strokeStyle=`rgba(255,240,180,${1-(now-st.hitT)/120})`; g.lineWidth=4; g.beginPath(); g.arc(st.x, st.y, r*1.8, 0, Math.PI*2); g.stroke(); }
+    if (!st.fist && this.phase!=="play"){
+      g.fillStyle="rgba(255,231,194,0.95)"; g.font="700 14px -apple-system,system-ui,sans-serif"; g.textAlign="center";
+      g.fillText("✊ 握拳拿槌", st.x, st.y - r*1.4); g.textAlign="start";
+    }
+  },
+};
+
+
 GAMES.follow = {
   id:"follow", title:"跟彈歌曲",
   start(songKey){
@@ -1448,6 +1734,7 @@ function drawHands(){
       for (const p of pts){ g.beginPath(); g.arc(p[0],p[1],2.6,0,Math.PI*2); g.fill(); }
     }
     const c=pts[9]; g.font="700 13px -apple-system,system-ui,sans-serif"; g.textAlign="center";
+    if (h.fist && Game.active?.noFistMute){ g.textAlign="start"; continue; }   // 打地鼠：拳頭由遊戲畫成槌子
     if (h.fist){   // 制音
       g.strokeStyle="rgba(255,120,120,0.9)"; g.lineWidth=3;
       g.beginPath(); g.arc(c[0],c[1],h.scale*0.9,0,Math.PI*2); g.stroke();
@@ -1552,7 +1839,7 @@ $("gmClose").onclick=closeGameMenu;
 $("gmStop").onclick=()=>{ closeGameMenu(); stopGame(); };
 $("ghStop").onclick=()=>stopGame();
 for (const b of document.querySelectorAll("[data-game]")) b.onclick=()=>{
-  const id=b.dataset.game; startGame(id, id==="follow" ? $("gmSong").value : undefined);
+  const id=b.dataset.game; startGame(id, id==="follow" ? $("gmSong").value : id==="mole" ? $("gmMole").value : undefined);
 };
 // 全螢幕：不支援的裝置（如 iPhone Safari）自動隱藏按鈕
 const fsEl = document.documentElement;
