@@ -174,7 +174,7 @@
   </div>
   <div class="gm-item">
     <div class="txt"><b>🔨 音樂打地鼠</b>
-      <div class="muted">握拳＝拿起槌子，舉起往下敲。每個洞是一個音，敲地鼠就是在演奏；金色快閃 +50、戴鋼盔要敲兩下、別敲兔子。選歌曲則地鼠依旋律出現，敲完就彈完一首歌。</div></div>
+      <div class="muted">握拳＝拿起槌子，槌子碰到地鼠就算打中。每個洞是一個音，敲地鼠就是在演奏；金色快閃 +50、戴鋼盔要敲兩下、別敲兔子。選歌曲則地鼠依旋律出現，敲完就彈完一首歌。</div></div>
     <div class="ctl"><select id="gmMole" aria-label="打地鼠模式"><option value="free">自由演奏 60 秒</option></select><button data-game="mole" class="on">開始</button></div>
   </div>
   <div class="gm-item">
@@ -1348,12 +1348,9 @@ const SONGS = {
 for (const [k,v] of Object.entries(SONGS)){ const o=document.createElement("option"); o.value=k; o.textContent=v.name; $("gmSong").appendChild(o); }
 for (const [k,v] of Object.entries(SONGS)){ const o=document.createElement("option"); o.value=k; o.textContent="🎵 "+v.name; $("gmMole").appendChild(o); }
 /* ---------- 遊戲 3：音樂打地鼠 ----------
-   操作：握拳＝拿起槌子（拳頭就是槌頭），往下劈再急停＝敲一下；觸控直接點地鼠。
-   判定（為了在 30fps、有延遲的手部追蹤下順手）：
-   - 位置用掌心（手腕＋四指根部平均）並平滑，比指尖穩定。
-   - 狀態機：待命 →（握拳且往下速度 > 門檻）→ 揮擊中 →（速度掉到峰值 35% 以下）→ 命中 → 冷卻 0.18 秒。
-     慢慢放下手、往上移動都不會觸發。門檻會依玩家揮擊力道自動調整（峰值平均的一半）。
-   - 瞄準輔助：命中點 1.35 倍洞口半徑內的地鼠都算；地鼠縮回後 0.12 秒內仍可打（補償延遲）。
+   操作：握拳＝拿起槌子（拳頭就是槌頭），槌頭只要碰到冒出來的地鼠就算打中；觸控直接點地鼠。
+   - 槌子位置用掌心（手腕＋四指根部平均），輕微平滑。
+   - 地鼠冒出 30% 以上才算得到；戴鋼盔的第一下打掉鋼盔後 0.4 秒內再碰不算。
    音樂：每個洞固定一個音，打中就用目前音色彈出那個音；歌曲模式下地鼠依旋律順序出現。 */
 const MOLE_TIME = 60;
 const MOLE_TYPES = {
@@ -1365,7 +1362,7 @@ GAMES.mole = {
     this.mode = SONGS[mode] ? mode : "free";
     this.song = SONGS[mode] || null;
     Object.assign(this, { score:0, combo:0, maxCombo:0, hits:0, whiffs:0, missed:0, rabbits:0, time:0, phase:"practice", over:false,
-      spawnCD:0.6, fx:[], hs:new Map(), ton:1.3, peaks:[], idx:0, countdown:0, layoutKey:"", holes:null });
+      spawnCD:0.6, fx:[], hs:new Map(), idx:0, countdown:0, layoutKey:"", holes:null });
     this.layout();
     // 練習：中間那個洞出現一隻不會跑的地鼠
     const mid = this.holes[Math.floor(this.holes.length/2)];
@@ -1397,7 +1394,7 @@ GAMES.mole = {
     this.holes = holes; this.layoutKey = `${W}x${H}x${BAR_H}`;
   },
   hint(){
-    if (this.phase==="practice") return camMode() ? "練習：握拳拿起槌子，舉起來往下敲那隻地鼠！" : "練習：點一下那隻地鼠！";
+    if (this.phase==="practice") return camMode() ? "練習：握拳拿起槌子，用槌子碰一下那隻地鼠！" : "練習：點一下那隻地鼠！";
     if (this.time < 5 && this.phase==="play") return this.song ? "照順序敲地鼠，就會彈出整首歌 🎵" : "敲地鼠就是在演奏！小心別敲到兔子 🐰";
     return "";
   },
@@ -1415,30 +1412,21 @@ GAMES.mole = {
   update(dt, now){
     if (this.over) return;
     if (this.layoutKey !== `${W}x${H}x${BAR_H}`) this.layout();
-    // ---- 手：握拳槌子的狀態機 ----
+    // ---- 手：握拳＝拿起槌子；槌頭只要「碰到」冒出來的地鼠就算打中（不用揮擊） ----
+    const hr = this.hammerR();
     for (const [key,h] of hands){
       let st = this.hs.get(key);
       const pts=h.pts, cx=(pts[0][0]+pts[5][0]+pts[9][0]+pts[13][0]+pts[17][0])/5, cy=(pts[0][1]+pts[5][1]+pts[9][1]+pts[13][1]+pts[17][1])/5;
-      if (!st){ st={ x:cx, y:cy, vy:0, t:h.lastSeen, state:"armed", peak:0, cool:0, hitT:-1 }; this.hs.set(key,st); }
-      if (h.lastSeen !== st.t){            // 新的一格追蹤資料
-        const dtt = Math.max(0.008, (h.lastSeen - st.t)/1000);
-        const nx = st.x*0.35 + cx*0.65, ny = st.y*0.35 + cy*0.65;
-        const v = (ny - st.y)/dtt/H;        // 往下為正，單位：螢幕高／秒
-        st.vy = st.vy*0.4 + v*0.6; st.x = nx; st.y = ny; st.t = h.lastSeen;
-        if (st.state==="armed" && h.fist && st.vy > this.ton){ st.state="swing"; st.peak=st.vy; st.swingT=now; }
-        else if (st.state==="swing"){
-          st.peak = Math.max(st.peak, st.vy);
-          if (!h.fist && st.vy < this.ton*0.5) st.state="armed";
-          else if (st.vy < st.peak*0.35 || now-st.swingT > 450){
-            st.state="cool"; st.cool=0.18; st.hitT=now;
-            this.peaks.push(st.peak); if (this.peaks.length>6) this.peaks.shift();
-            this.ton = clamp(0.5*this.peaks.reduce((a,b)=>a+b,0)/this.peaks.length, 0.8, 2.0);   // 自動校正門檻
-            this.impact([st.x, st.y], now, key);
-          }
-        }
-      }
+      if (!st){ st={ x:cx, y:cy, t:h.lastSeen, hitT:-1 }; this.hs.set(key,st); }
+      if (h.lastSeen !== st.t){ st.x = st.x*0.2 + cx*0.8; st.y = st.y*0.2 + cy*0.8; st.t = h.lastSeen; }   // 輕微平滑，延遲小
       st.fist = h.fist;
-      if (st.state==="cool"){ st.cool -= dt; if (st.cool<=0 && st.vy < this.ton*0.5) st.state="armed"; }
+      if (!h.fist) continue;
+      for (const ho of this.holes){
+        const m = ho.mole;
+        if (!m || m.state==="hit" || m.state==="gone" || m.rise < 0.3 || this.time < (m.immuneUntil||0)) continue;
+        const R = ho.r*0.72, my = Math.min(ho.y + R*1.2 - m.rise*R*2.0, ho.y - R*0.3);   // 地鼠露出部分的中心
+        if (Math.hypot(st.x-ho.x, st.y-my) < hr*1.15 + R*1.05){ st.hitT = now; this.hitMole(ho); }
+      }
     }
     for (const key of this.hs.keys()) if (!hands.has(key)) this.hs.delete(key);
     // ---- 地鼠動畫與逾時 ----
@@ -1491,7 +1479,7 @@ GAMES.mole = {
     const ho = this.holes.find(h=>h.note===notes[this.idx]); this.idx++;
     if (ho) this.pop(ho, "normal", 2.2);
   },
-  impact(p, now, key){
+  impact(p, now, key){   // 觸控／滑鼠點擊
     // 找命中的地鼠（瞄準輔助：1.35 倍洞口半徑；剛縮回 0.12 秒內也算）
     let best=null, bd=1e9;
     for (const ho of this.holes){
@@ -1506,6 +1494,11 @@ GAMES.mole = {
       if (nearHole && this.phase==="play"){ this.whiffs++; this.combo=0; this.fx.push({x:p[0],y:p[1]-20,text:"空",color:"#9aa3b5",life:1}); }
       return;
     }
+    this.hitMole(best);
+  },
+  hammerR(){ return Math.max(18, Math.min(...this.holes.map(o=>o.r))*0.42); },
+  // 打中一隻地鼠（槌子碰到或觸控點到都走這裡）
+  hitMole(best){
     const m = best.mole, voice = { freq:midiToFreq(best.note), u1:best.x/W, u2:best.x/W };
     if (m.type==="rabbit"){
       this.score = Math.max(0, this.score + MOLE_TYPES.rabbit.pts); this.combo=0; this.rabbits++;
@@ -1516,8 +1509,8 @@ GAMES.mole = {
       burst(best.x, best.y-best.r*0.6, 0, 20, 0.9);
       return;
     }
-    if (m.type==="helmet" && m.hp>1){        // 第一下：鋼盔飛掉
-      m.hp--; m.stay += 0.6;
+    if (m.type==="helmet" && m.hp>1){        // 第一下：鋼盔飛掉（0.4 秒內再碰不算，要再碰一次）
+      m.hp--; m.stay += 0.6; m.immuneUntil = this.time + 0.4;
       playPluck(voice, 0.5, 0.05);
       this.fx.push({ x:best.x, y:best.y-best.r*1.6, text:"鏘！", color:"#cfd6e3", life:1 });
       burst(best.x, best.y-best.r*1.2, 210, 14, 0.9);
@@ -1605,9 +1598,8 @@ GAMES.mole = {
     if (m.type==="gold"){ g.fillStyle="#fff7c0"; g.font=`${R*0.45}px sans-serif`; g.textAlign="center"; g.fillText("✨", x+R*0.9, by-R*0.9); g.textAlign="start"; }
   },
   drawHammer(st, h, now){
-    const r = Math.max(18, Math.min(...this.holes.map(o=>o.r))*0.42);
-    const swinging = st.state==="swing", justHit = now - st.hitT < 120;
-    const ang = justHit ? 0.55 : swinging ? 0.35 : st.fist ? -0.35 : -0.2;
+    const r = this.hammerR(), justHit = now - st.hitT < 150;
+    const ang = justHit ? 0.6 : st.fist ? -0.3 : -0.2;
     g.save(); g.translate(st.x, st.y); g.rotate(ang); g.globalAlpha = st.fist ? 1 : 0.4;
     // 握把（往右下延伸）
     g.fillStyle="#b07a45"; g.beginPath(); g.roundRect(-r*0.22, 0, r*0.44, r*2.6, r*0.2); g.fill();
