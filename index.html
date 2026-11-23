@@ -87,6 +87,16 @@
   #ghText{font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   #ghText b{color:#ffe7c2}
   #ghStop{min-height:30px;padding:3px 10px;font-size:13px}
+  /* ---------- 隔空操作：指標、懸停、選單 ---------- */
+  .air-cursor{position:fixed;left:0;top:0;width:38px;height:38px;margin:-19px 0 0 -19px;border-radius:50%;pointer-events:none;z-index:45;display:none;
+    border:2px solid rgba(127,227,255,.95);box-shadow:0 0 12px rgba(127,227,255,.6);
+    background:conic-gradient(rgba(127,227,255,.6) var(--p,0%), rgba(127,227,255,.08) 0)}
+  .air-cursor.pin{background:rgba(127,227,255,.75);transform:scale(.8)}
+  .air-hover{outline:2px solid #7fe3ff !important;outline-offset:2px;background:rgba(127,227,255,.24) !important}
+  .air-press{background:rgba(127,227,255,.55) !important}
+  #airPicker{position:fixed;z-index:42;display:none;flex-direction:column;gap:6px;min-width:180px;max-height:70vh;overflow:auto;
+    background:rgba(16,18,27,.97);border:1px solid var(--line);border-radius:14px;padding:8px}
+  #airPicker button{min-height:46px;text-align:left;font-size:15px}
   #gameOver .big{font-size:34px;font-weight:800;margin:6px 0 2px;color:#ffe7c2}
 </style>
 </head>
@@ -100,8 +110,8 @@
   <div class="chip" id="hFpsChip"><b id="hFps">–</b> fps</div>
 </div>
 <div id="hint"></div>
-<button id="delBtn">✕ 刪除這條弦</button>
-<div id="gameHud"><span id="ghText"></span><button id="ghStop">結束</button></div>
+<button id="delBtn" data-air-nodwell>✕ 刪除這條弦</button>
+<div id="gameHud"><span id="ghText"></span><button id="ghStop" data-air-nodwell>結束</button></div>
 
 <div id="bar">
   <div class="grp"><label for="selScale">音階</label>
@@ -166,10 +176,11 @@
     <h1>Air Strings <span>空中弦</span></h1>
     <p class="sub">用雙手在空中拉出會發聲的弦，再用手指撥它。</p>
     <ol>
-      <li><b>拉弦</b>：雙手都用拇指捏住食指，往兩邊拉開再放開，弦就留在空中。</li>
+      <li><b>拉弦</b>：雙手都用拇指捏住食指往兩邊拉開再放開；或單手捏住拖一段再放開。</li>
       <li><b>撥弦</b>：張開手，用食指或中指劃過弦。撥在弦的兩端聲音較亮，撥在中間較圓。</li>
       <li><b>調整</b>：捏住弦的端點拖動改長短；捏住弦的中段可以整條搬動。</li>
       <li><b>手勢</b>：撥完後手掌上下抖動＝顫音；握拳＝把所有聲音按住（制音）。</li>
+      <li><b>隔空按鈕</b>：手指移到下方工具列的按鈕上，捏一下或停住約 1 秒就會按下。</li>
       <li><b>多人</b>：最多同時追蹤 4 隻手，兩個人可以一起彈。</li>
     </ol>
     <div class="btns">
@@ -202,6 +213,7 @@
   </div>
 </div>
 <div id="toast"></div>
+<div id="airPicker" role="listbox"></div>
 
 <script type="module">
 const VERSION = "__BUILD_VERSION__";   // 由 CI 自動蓋上，請勿手改
@@ -231,7 +243,9 @@ const TONES = {
 const MIN_LEN = 0.06;          // 最短弦長（佔畫面對角線比例）
 const MAX_STRINGS = 16;
 const PINCH_ON = 0.33, PINCH_OFF = 0.48;   // 捏合判定（拇指-食指距離 / 手掌大小），有遲滯
-const FIST_ON = 1.15, FIST_OFF = 1.35;     // 握拳判定（四指指尖到手腕平均距離 / 手掌大小），有遲滯
+const FIST_ON = 1.15, FIST_OFF = 1.35;     // 握拳判定（四指指尖到手腕「最遠」距離 / 手掌大小），有遲滯
+const PINCH_RELEASE_FRAMES = 2;            // 連續幾格張開才算放開（手快速移動時不會中斷拉弦）
+const AIR_DWELL_MS = 1100;                 // 隔空操作：手指停在按鈕上多久自動點下
 const MAX_HANDS = 4;
 const LOST_GRACE_MS = 140;     // 手短暫消失的容忍時間
 const PLUCK_COOLDOWN_MS = 110;
@@ -600,7 +614,8 @@ const dist2 = (a,b)=>Math.hypot(a[0]-b[0],a[1]-b[1]);
 
 function dropHand(key){
   const h = hands.get(key); if (!h) return;
-  if (h.pinched) onPinchEnd(key);
+  if (h.pinched && !h.uiPinch) onPinchEnd(key);
+  h.uiEl?.classList.remove("air-hover"); airCursors.get(key)?.remove(); airCursors.delete(key);
   if (grabs.has(key)) endGrab(key);
   hands.delete(key);
 }
@@ -645,16 +660,26 @@ function updateHand(key, h, pts, now){
   h.pts = pts; h.lastSeen = now; h.scale = scale;
   h.pinchR = dist2(pts[4],pts[8])/scale;
   h.pinchPt = [(pts[4][0]+pts[8][0])/2, (pts[4][1]+pts[8][1])/2];
-  // 握拳 → 制音
-  const curl = [8,12,16,20].reduce((a,i)=>a+dist2(pts[i],pts[0]),0)/4/scale;
+  // 握拳 → 制音：四根手指「全部」收回才算（看最遠的一根），且拇指沒碰到食指尖
+  // → 其他手指彎著、只用拇指食指捏的「OK 手勢」不會被誤判成握拳
+  const curl = Math.max(...[8,12,16,20].map(i=>dist2(pts[i],pts[0])))/scale;
   const wasFist = h.fist;
-  h.fist = wasFist ? curl < FIST_OFF : curl < FIST_ON;
+  h.fist = (wasFist ? curl < FIST_OFF : curl < FIST_ON) && (h.pinched ? false : h.pinchR > PINCH_ON);
   if (h.fist && !wasFist) muteAll();
-  // 捏合（握拳時不算捏）
+  // 隔空操作介面：捏合點落在按鈕／選單上時，捏一下＝點擊，停住不動＝自動點擊
+  const ui = uiTargetAt(h.pinchPt[0], h.pinchPt[1]);
+  // 捏合（握拳時不算捏）；放開需連續數格才成立，避免快速拉弦時中斷
   const wasPinched = h.pinched;
-  h.pinched = !h.fist && (wasPinched ? h.pinchR < PINCH_OFF : h.pinchR < PINCH_ON);
-  if (!wasPinched && h.pinched) onPinchStart(key, h);
-  if (wasPinched && !h.pinched) onPinchEnd(key);
+  let pin;
+  if (wasPinched){ h.offN = h.pinchR >= PINCH_OFF ? (h.offN||0)+1 : 0; pin = h.offN < PINCH_RELEASE_FRAMES; }
+  else pin = h.pinchR < PINCH_ON;
+  h.pinched = !h.fist && pin; if (!h.pinched) h.offN = 0;
+  if (!wasPinched && h.pinched){
+    if (ui && !grabs.has(key) && !(draft && (draft.a===key||draft.b===key))){ h.uiPinch = true; h.dwellDone = true; airClick(ui); }
+    else onPinchStart(key, h);
+  }
+  if (wasPinched && !h.pinched){ if (h.uiPinch) h.uiPinch = false; else onPinchEnd(key); }
+  updateAirHover(key, h, ui, now);
   // 手掌上下抖動 → 顫音：0.6 秒內方向反轉 ≥2 次、且每次幅度夠大
   h.yHist.push([now, pts[9][1]]); while (h.yHist.length && now-h.yHist[0][0] > 600) h.yHist.shift();
   const thr = DIAG*0.012; let dir=0, ext=h.yHist[0][1], rev=0;
@@ -664,6 +689,66 @@ function updateHand(key, h, pts, now){
     else { if (y<ext) ext=y; else if (y-ext>thr){ rev++; dir=1; ext=y; } }
   }
   h.shake = !h.pinched && !h.fist && rev>=2;
+}
+
+/* ---------- 隔空操作介面（工具列、遊戲選單、對話框） ---------- */
+const airCursors = new Map();   // 手 key -> 指標 div
+function uiTargetAt(x,y){
+  if (!(x>=0 && y>=0 && x<W && y<H)) return null;
+  const el = document.elementFromPoint(x,y);
+  if (!el || el===cv) return null;
+  const t = el.closest("button, select");
+  if (!t || t.disabled || !t.offsetParent) return null;
+  return t;
+}
+function airClick(el){
+  el.classList.add("air-press"); setTimeout(()=>el.classList.remove("air-press"), 200);
+  if (el.tagName==="SELECT"){ openAirPicker(el); return; }
+  initAudio(); el.click();
+}
+// 原生下拉選單無法用程式打開 → 改成一排大按鈕讓手指選
+function openAirPicker(sel){
+  const pk = $("airPicker"); pk.innerHTML = "";
+  for (const o of sel.options){
+    if (o.disabled || (o.value==="" && sel.id==="selPreset")) continue;
+    const b = document.createElement("button"); b.textContent = o.textContent;
+    if (o.value===sel.value) b.classList.add("on");
+    b.onclick = ()=>{ closeAirPicker(); sel.value = o.value; sel.dispatchEvent(new Event("change")); };
+    pk.appendChild(b);
+  }
+  const x = document.createElement("button"); x.textContent = "✕ 取消"; x.onclick = closeAirPicker; pk.appendChild(x);
+  pk.style.display = "flex";
+  const r = sel.getBoundingClientRect(), pr = pk.getBoundingClientRect();
+  pk.style.left = clamp(r.left + r.width/2 - pr.width/2, 8, W-pr.width-8) + "px";
+  pk.style.top  = clamp(r.top - pr.height - 8, 8, H-pr.height-8) + "px";
+}
+function closeAirPicker(){ $("airPicker").style.display = "none"; }
+function updateAirHover(key, h, el, now){
+  if (el !== h.uiEl){
+    h.uiEl?.classList.remove("air-hover");
+    h.uiEl = el; h.dwellT0 = now; h.dwellDone = false;
+    el?.classList.add("air-hover");
+  }
+  let c = airCursors.get(key);
+  if (!c){ c = document.createElement("div"); c.className = "air-cursor"; document.body.appendChild(c); airCursors.set(key, c); }
+  const [x,y] = h.pinchPt, inBar = y > H - BAR_H - 6;
+  c.style.display = (el || inBar) ? "block" : "none";
+  c.style.transform = ""; c.style.left = x+"px"; c.style.top = y+"px";
+  c.classList.toggle("pin", !!h.pinched);
+  // 停住不動自動點擊（手正在拉弦或搬弦時不算；「結束」這類危險按鈕只接受捏）
+  let p = 0;
+  const busy = grabs.has(key) || (draft && (draft.a===key||draft.b===key));
+  if (el && !h.pinched && !h.dwellDone && !busy && !el.hasAttribute("data-air-nodwell")){
+    p = (now - h.dwellT0) / AIR_DWELL_MS;
+    if (p >= 1){ h.dwellDone = true; p = 0; airClick(el); }
+  }
+  c.style.setProperty("--p", Math.round(clamp(p,0,1)*100)+"%");
+  // 工具列放不下時：指標停在左右邊緣會自動捲動（指著完整可見的按鈕時不捲，免得按鈕被捲走）
+  const bar = $("bar"), er = el?.getBoundingClientRect();
+  const clipped = !el || er.left < 0 || er.right > W;
+  if (inBar && clipped && bar.scrollWidth > bar.clientWidth){
+    if (x < 70) bar.scrollLeft -= 10; else if (x > W-70) bar.scrollLeft += 10;
+  }
 }
 
 /* ---------- 調整已建立的弦：捏住端點拖動；捏住中段整條搬動 ---------- */
@@ -730,7 +815,7 @@ function endGrab(key){
 
 function onPinchStart(key, h){
   if (draft && !draft.b && draft.a!==key && draft.mode!=="ptr"){ draft.mode="two"; draft.b=key; return; }
-  if (startGrab(key, h.pinchPt)) return;
+  if (startGrab(key, h.pinchPt, Game.active?.id!=="keeper")) return;   // 守護球中不整條搬，捏下去優先拉新弦
   if (!draft){ draft = { mode:"one", a:key, b:null, p1:h.pinchPt.slice(), p2:h.pinchPt.slice() }; S.selected=null; }
 }
 function onPinchEnd(key){
@@ -769,7 +854,7 @@ function nearestString(x,y,maxD){
 }
 // 觸控／滑鼠：按在端點 → 調整；在弦上長按 → 整條搬動；劃過弦 → 撥弦；空白處拖曳 → 拉新弦
 cv.addEventListener("pointerdown", e=>{
-  initAudio(); cv.setPointerCapture(e.pointerId); closeGameMenu();
+  initAudio(); cv.setPointerCapture(e.pointerId); closeGameMenu(); closeAirPicker();
   const p=[e.clientX,e.clientY], key="p"+e.pointerId;
   const st = { start:p, last:p, t0:performance.now(), moved:false, plucked:false, timer:null };
   ptr.set(e.pointerId, st);
@@ -873,7 +958,7 @@ GAMES.keeper = {
     return b;
   },
   addBall(delay){ this.balls.push(this.newBallState({ hue:BALL_HUES[this.balls.length % BALL_HUES.length] }, delay)); },
-  hint(){ return this.balls[0].wait>0 || this.bounces<2 ? (camMode() ? "雙手捏住往兩邊拉出弦，接住球別讓它掉下去！" : "在球下方拖曳拉出弦，接住球別讓它掉下去！") : ""; },
+  hint(){ return this.balls[0].wait>0 || this.bounces<2 ? (camMode() ? "單手捏住拖一下、放開就是一條弦（雙手也可以），接住球別讓它掉下去！" : "在球下方拖曳拉出弦，接住球別讓它掉下去！") : ""; },
   hud(){
     return `⚽ <b>${this.score}</b>　${"❤️".repeat(Math.max(0,this.lives))}${"🖤".repeat(Math.max(0,KEEPER_LIVES-this.lives))}　⚡<b>${this.speedText()}</b>　🔴×${this.balls.length}　斷弦 ${this.removed%KEEPER_PER_LEVEL}/${KEEPER_PER_LEVEL}`;
   },
@@ -1311,6 +1396,7 @@ window.addEventListener("keydown", e=>{
     else if (e.key==="Enter"){ e.preventDefault(); $("goAgain").click(); }
     return;
   }
+  if (e.key==="Escape" && $("airPicker").style.display==="flex"){ closeAirPicker(); return; }
   if (e.key==="Escape" && $("gameMenu").style.display==="block"){ closeGameMenu(); return; }
   if (e.target.tagName==="SELECT") return;
   const mod = e.ctrlKey||e.metaKey;
@@ -1370,7 +1456,7 @@ setInterval(checkVersion, 5*60*1000);
 
 load(); afterChange(); syncUI();
 requestAnimationFrame(frame);
-window.__airstrings = { S, Game, GAMES, makeString, doAction, tryPluck, pitchForLength, processHands, hands, grabs, links, voices,
+window.__airstrings = { airCursors, S, Game, GAMES, makeString, doAction, tryPluck, pitchForLength, processHands, hands, grabs, links, voices,
   applyPreset, startGame, stopGame, get draft(){return draft;}, get vibDepth(){return vibDepth;} };  // 供測試
 </script>
 </body>
