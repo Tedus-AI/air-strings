@@ -74,7 +74,7 @@
   #delBtn{position:fixed;display:none;z-index:12;padding:6px 12px;min-height:34px;border-radius:999px;background:rgba(20,22,30,.92)}
   /* ---------- 遊戲 ---------- */
   #gameMenu{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(var(--bar-h) + 8px);width:min(440px,calc(100vw - 16px));
-    max-height:calc(100vh - var(--bar-h) - 40px);overflow:auto;display:none;z-index:15;background:rgba(16,18,27,.96);border:1px solid var(--line);border-radius:16px;padding:12px}
+    max-height:calc(100vh - var(--bar-h) - 40px);overflow:auto;display:none;z-index:22;background:rgba(16,18,27,.96);border:1px solid var(--line);border-radius:16px;padding:12px}
   #gameMenu .head{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
   #gameMenu .head b{font-size:16px}
   .gm-item{display:flex;gap:10px;align-items:center;padding:10px;border:1px solid var(--line);border-radius:12px;margin-top:8px;background:rgba(255,255,255,.03)}
@@ -86,7 +86,11 @@
     background:var(--panel);border:1px solid rgba(255,190,90,.45);border-radius:12px;padding:5px 6px 5px 12px;max-width:calc(100vw - 16px);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
   #ghText{font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   #ghText b{color:#ffe7c2}
-  #ghStop{min-height:30px;padding:3px 10px;font-size:13px}
+  #ghPause{min-height:34px;padding:3px 12px;font-size:14px}
+  /* 遊戲進行中：收起工具列，整個畫面都給遊戲；暫停時才回來 */
+  body.in-play #bar{display:none}
+  #pauseOv .btns{flex-direction:column;align-items:stretch}
+  #pauseOv button{min-height:48px;font-size:16px}
   /* ---------- 隔空操作：指標、懸停、選單 ---------- */
   .air-cursor{position:fixed;left:0;top:0;width:38px;height:38px;margin:-19px 0 0 -19px;border-radius:50%;pointer-events:none;z-index:45;display:none;
     border:2px solid rgba(127,227,255,.95);box-shadow:0 0 12px rgba(127,227,255,.6);
@@ -111,7 +115,7 @@
 </div>
 <div id="hint"></div>
 <button id="delBtn" data-air-nodwell>✕ 刪除這條弦</button>
-<div id="gameHud"><span id="ghText"></span><button id="ghStop" data-air-nodwell>結束</button></div>
+<div id="gameHud"><span id="ghText"></span><button id="ghPause" data-air-hold="600" title="暫停（隔空：捏住 0.6 秒）">⏸ 暫停</button></div>
 
 <div id="bar">
   <div class="grp"><label for="selScale">音階</label>
@@ -211,6 +215,18 @@
     </div>
   </div>
 </div>
+<div id="pauseOv" class="overlay" role="dialog" aria-modal="true">
+  <div class="card">
+    <div><b>⏸ 已暫停</b></div>
+    <div class="muted" id="pzTitle"></div>
+    <div class="btns">
+      <button id="pzResume" class="on">▶ 繼續 (Esc)</button>
+      <button id="pzRestart">↻ 重新開始</button>
+      <button id="pzMenu">🎮 換遊戲</button>
+      <button id="pzExit">✕ 離開遊戲</button>
+    </div>
+  </div>
+</div>
 <div id="gameOver" class="overlay" role="dialog" aria-modal="true">
   <div class="card">
     <div id="goTitle">遊戲結束</div>
@@ -291,7 +307,8 @@ function resize(){
   W = window.innerWidth; H = window.innerHeight; DIAG = Math.hypot(W,H);
   cv.width = Math.round(W*DPR); cv.height = Math.round(H*DPR);
   g.setTransform(DPR,0,0,DPR,0,0);
-  BAR_H = $("bar").getBoundingClientRect().height || 46;
+  const bar = $("bar");
+  BAR_H = getComputedStyle(bar).display==="none" ? 0 : (bar.getBoundingClientRect().height || 46);
   document.documentElement.style.setProperty("--bar-h", BAR_H+"px");
 }
 window.addEventListener("resize", resize); resize();
@@ -678,7 +695,7 @@ function updateHand(key, h, pts, now){
   h.fist = (wasFist ? curl < FIST_OFF : curl < FIST_ON) && (h.pinchR > PINCH_ON || idxFold < 0.65);
   if (h.fist && !wasFist && !Game.active?.noFistMute) muteAll();   // 打地鼠時握拳是拿槌子，不制音
   // 隔空操作介面：捏合點落在按鈕／選單上時，捏一下＝點擊，停住不動＝自動點擊
-  const ui = uiTargetAt(h.pinchPt[0], h.pinchPt[1]);
+  const ui = h.fist ? null : uiTargetAt(h.pinchPt[0], h.pinchPt[1]);   // 拳頭（打地鼠的槌子）不操作介面
   // 捏合（握拳時不算捏）；放開需連續數格才成立，避免快速拉弦時中斷
   const wasPinched = h.pinched;
   let pin;
@@ -686,10 +703,15 @@ function updateHand(key, h, pts, now){
   else pin = h.pinchR < PINCH_ON;
   h.pinched = !h.fist && pin; if (!h.pinched) h.offN = 0;
   if (!wasPinched && h.pinched){
-    if (ui && !grabs.has(key) && !(draft && (draft.a===key||draft.b===key))){ h.uiPinch = true; h.dwellDone = true; airClick(ui); }
+    if (ui && !grabs.has(key) && !(draft && (draft.a===key||draft.b===key))){
+      h.uiPinch = true; h.dwellDone = true;
+      const hold = +(ui.dataset.airHold || 0);
+      if (hold > 0){ h.holdEl = ui; h.holdT0 = now; h.holdMs = hold; }   // 需要捏住一段時間才算（防誤觸）
+      else airClick(ui);
+    }
     else onPinchStart(key, h);
   }
-  if (wasPinched && !h.pinched){ if (h.uiPinch) h.uiPinch = false; else onPinchEnd(key); }
+  if (wasPinched && !h.pinched){ if (h.uiPinch){ h.uiPinch = false; h.holdEl = null; } else onPinchEnd(key); }
   updateAirHover(key, h, ui, now);
   // 手掌上下抖動 → 顫音：0.6 秒內方向反轉 ≥2 次、且每次幅度夠大
   h.yHist.push([now, pts[9][1]]); while (h.yHist.length && now-h.yHist[0][0] > 600) h.yHist.shift();
@@ -703,6 +725,9 @@ function updateHand(key, h, pts, now){
 }
 
 /* ---------- 隔空操作介面（工具列、遊戲選單、對話框） ---------- */
+// 遊戲進行中（沒暫停、沒有結算畫面）停用「停住自動點擊」，手在畫面上移動不會誤按任何東西
+const inPlay = () => !!Game.active && !Game.paused && $("gameOver").style.display!=="flex";
+const dwellAllowed = () => !inPlay();
 const airCursors = new Map();   // 手 key -> 指標 div
 function uiTargetAt(x,y){
   if (!(x>=0 && y>=0 && x<W && y<H)) return null;
@@ -749,7 +774,11 @@ function updateAirHover(key, h, el, now){
   // 停住不動自動點擊（手正在拉弦或搬弦時不算；「結束」這類危險按鈕只接受捏）
   let p = 0;
   const busy = grabs.has(key) || (draft && (draft.a===key||draft.b===key));
-  if (el && !h.pinched && !h.dwellDone && !busy && !el.hasAttribute("data-air-nodwell")){
+  if (h.holdEl){   // 捏住按鈕：進度環走完才按下；手移開就取消
+    if (el !== h.holdEl || !h.pinched) h.holdEl = null;
+    else { p = (now - h.holdT0) / h.holdMs; if (p >= 1){ const t = h.holdEl; h.holdEl = null; p = 0; airClick(t); } }
+  }
+  else if (el && !h.pinched && !h.dwellDone && !busy && dwellAllowed() && !el.hasAttribute("data-air-nodwell") && !el.dataset.airHold){
     p = (now - h.dwellT0) / AIR_DWELL_MS;
     if (p >= 1){ h.dwellDone = true; p = 0; airClick(el); }
   }
@@ -826,6 +855,7 @@ function endGrab(key){
 }
 
 function onPinchStart(key, h){
+  if (Game.paused) return;                       // 暫停中，畫面上的捏不影響遊戲
   if (Game.active?.capturePinch?.(key, h.pinchPt)) return;
   if (draft && !draft.b && draft.a!==key && draft.mode!=="ptr"){ draft.mode="two"; draft.b=key; return; }
   if (startGrab(key, h.pinchPt, Game.active?.id!=="keeper")) return;   // 守護球中不整條搬，捏下去優先拉新弦
@@ -911,10 +941,19 @@ cv.addEventListener("pointerup", endPtr); cv.addEventListener("pointercancel", e
    ===================================================================== */
 const GAMES = {};
 const bestKey = () => Game.lastId + (Game.lastOpt ? ":"+Game.lastOpt : "");
+function setPaused(v){
+  if (!Game.active) v = false;
+  Game.paused = v;
+  $("pauseOv").style.display = v ? "flex" : "none";
+  if (v) $("pzTitle").textContent = Game.active.title;
+  syncUI();
+}
 function startGame(id, opt){
   closeGameMenu(); $("gameOver").style.display="none";
   if (Game.active) stopGame(true);
   initAudio();
+  Game.paused = false; $("pauseOv").style.display="none";
+  document.body.classList.add("in-play"); resize();      // 先收起工具列，遊戲版面才會用到整個畫面
   Game.snap = { strings:S.strings.slice(), undo:S.undo, redo:S.redo, scale:S.settings.scale, root:S.settings.root };
   S.strings.length=0; S.undo=[]; S.redo=[]; S.selected=null; draft=null; grabs.clear(); links.length=0;
   Game.active = GAMES[id]; Game.lastId=id; Game.lastOpt=opt;
@@ -923,7 +962,7 @@ function startGame(id, opt){
 }
 function stopGame(silent){
   const gm = Game.active; if (!gm) return;
-  gm.end?.(); Game.active = null;
+  gm.end?.(); Game.active = null; Game.paused = false; $("pauseOv").style.display="none";
   const sn = Game.snap; Game.snap=null;
   S.strings.length=0; S.strings.push(...sn.strings); S.undo=sn.undo; S.redo=sn.redo;
   for (const s of S.strings){ s.sag=null; s.ballHits=0; }
@@ -1339,7 +1378,7 @@ GAMES.mole = {
       const old = this.holes?.[i];
       holes.push({ x, y, r:r*sc, note:notes[i], mole: old?.mole || null });
     }
-    this.holes = holes; this.layoutKey = `${W}x${H}`;
+    this.holes = holes; this.layoutKey = `${W}x${H}x${BAR_H}`;
   },
   hint(){
     if (this.phase==="practice") return camMode() ? "練習：握拳拿起槌子，舉起來往下敲那隻地鼠！" : "練習：點一下那隻地鼠！";
@@ -1359,7 +1398,7 @@ GAMES.mole = {
   },
   update(dt, now){
     if (this.over) return;
-    if (this.layoutKey !== `${W}x${H}`) this.layout();
+    if (this.layoutKey !== `${W}x${H}x${BAR_H}`) this.layout();
     // ---- 手：握拳槌子的狀態機 ----
     for (const [key,h] of hands){
       let st = this.hs.get(key);
@@ -1787,7 +1826,7 @@ function frame(){
   }
   updateVibrato(dt);
   const gm = Game.active;
-  if (gm) try{ gm.update?.(dt, now); }catch(e){ console.error(e); }
+  if (gm && !Game.paused) try{ gm.update?.(dt, now); }catch(e){ console.error(e); }
   drawVideo();
   drawLinks(dt);
   for (const s of S.strings) drawString(s, dt);
@@ -1822,6 +1861,8 @@ function syncUI(){
   $("btnGame").classList.toggle("on", !!gm);
   $("btnGame").textContent = gm ? "🎮 "+gm.title : "🎮 遊戲類";
   $("gameHud").style.display = gm ? "flex" : "none";
+  const hideBar = !!gm && !Game.paused;
+  if (document.body.classList.contains("in-play") !== hideBar){ document.body.classList.toggle("in-play", hideBar); resize(); }
   $("gmStop").style.display = gm ? "block" : "none";
   if (gm) $("ghText").innerHTML = gm.hud();
   updateHint();
@@ -1837,7 +1878,11 @@ function closeGameMenu(){ $("gameMenu").style.display="none"; }
 $("btnGame").onclick=()=>{ $("gameMenu").style.display==="block" ? closeGameMenu() : openGameMenu(); };
 $("gmClose").onclick=closeGameMenu;
 $("gmStop").onclick=()=>{ closeGameMenu(); stopGame(); };
-$("ghStop").onclick=()=>stopGame();
+$("ghPause").onclick=()=>setPaused(true);
+$("pzResume").onclick=()=>setPaused(false);
+$("pzRestart").onclick=()=>{ setPaused(false); startGame(Game.lastId, Game.lastOpt); };
+$("pzMenu").onclick=()=>{ openGameMenu(); };
+$("pzExit").onclick=()=>{ setPaused(false); stopGame(); };
 for (const b of document.querySelectorAll("[data-game]")) b.onclick=()=>{
   const id=b.dataset.game; startGame(id, id==="follow" ? $("gmSong").value : id==="mole" ? $("gmMole").value : undefined);
 };
@@ -1870,6 +1915,7 @@ window.addEventListener("keydown", e=>{
     return;
   }
   if (e.key==="Escape" && $("airPicker").style.display==="flex"){ closeAirPicker(); return; }
+  if (e.key==="Escape" && Game.active && $("gameMenu").style.display!=="block"){ setPaused(!Game.paused); return; }
   if (e.key==="Escape" && $("gameMenu").style.display==="block"){ closeGameMenu(); return; }
   if (e.target.tagName==="SELECT") return;
   const mod = e.ctrlKey||e.metaKey;
